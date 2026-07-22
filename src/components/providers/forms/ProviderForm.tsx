@@ -1015,6 +1015,8 @@ function ProviderFormFull({
   ]);
 
   const [isCommonConfigModalOpen, setIsCommonConfigModalOpen] = useState(false);
+  const handleCommonConfigEditClick = useCallback(() => setIsCommonConfigModalOpen(true), []);
+  const handleCommonConfigModalClose = useCallback(() => setIsCommonConfigModalOpen(false), []);
 
   const shouldApplyLocalProxyRequestOverrides =
     (appId === "claude" || appId === "codex") && category !== "official";
@@ -2579,17 +2581,18 @@ function ProviderFormFull({
             <>
               <CommonConfigEditor
                 value={form.getValues("settingsConfig")}
-                onChange={(value) => form.setValue("settingsConfig", value)}
+                onChange={handleSettingsConfigChange}
                 useCommonConfig={useCommonConfig}
                 onCommonConfigToggle={handleCommonConfigToggle}
                 commonConfigSnippet={commonConfigSnippet}
                 onCommonConfigSnippetChange={handleCommonConfigSnippetChange}
                 commonConfigError={commonConfigError}
-                onEditClick={() => setIsCommonConfigModalOpen(true)}
+                onEditClick={handleCommonConfigEditClick}
                 isModalOpen={isCommonConfigModalOpen}
-                onModalClose={() => setIsCommonConfigModalOpen(false)}
+                onModalClose={handleCommonConfigModalClose}
                 onExtract={handleClaudeExtract}
                 isExtracting={isClaudeExtracting}
+                darkMode={isDarkMode}
               />
               {settingsConfigErrorField}
             </>

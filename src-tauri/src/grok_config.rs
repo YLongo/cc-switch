@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use crate::config::{get_home_dir, write_text_file};
 use crate::error::AppError;
 use crate::provider::Provider;
+use toml_edit::DocumentMut;
 
 pub const DEFAULT_MODEL: &str = "grok-4.5";
 pub const DEFAULT_API_BACKEND: &str = "responses";
@@ -406,7 +407,28 @@ pub fn write_grok_live_settings(settings: &Value) -> Result<(), AppError> {
             )
         })?;
     validate_config_toml_syntax(config)?;
-    write_text_file(&get_grok_config_path(), config)
+
+    // 合并现有 config.toml：仅覆盖/新增 cc-switch 管理的 [model] 等字段，
+    // 保留用户手动添加的其他 TOML 字段
+    let path = get_grok_config_path();
+    let new_doc: DocumentMut = config.parse().map_err(|e| {
+        AppError::Message(format!("Grok Build TOML 解析失败: {e}"))
+    })?;
+    let mut doc: DocumentMut = if path.exists() {
+        std::fs::read_to_string(&path)
+            .map_err(|e| AppError::io(&path, e))?
+            .parse()
+            .unwrap_or_default()
+    } else {
+        DocumentMut::default()
+    };
+    let keys: Vec<String> = new_doc.iter().map(|(k, _)| k.to_string()).collect();
+    for key in keys {
+        if let Some(item) = new_doc.get(&key).cloned() {
+            doc.insert(&key, item);
+        }
+    }
+    write_text_file(&path, &doc.to_string())
 }
 
 #[cfg(test)]

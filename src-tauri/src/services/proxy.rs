@@ -1942,6 +1942,11 @@ impl ProxyService {
         write_live_with_common_config(self.db.as_ref(), app_type, provider)
             .map_err(|e| format!("写入 {app_type:?} Live 配置失败: {e}"))?;
 
+        // 合并写入后仍有可能残留代理占位符（如现有 Live 中未被 SSOT 覆盖的字段），
+        // 执行一次清理以确保状态一致
+        self.cleanup_takeover_placeholders_in_live_for_app(app_type)
+            .map_err(|e| format!("清理 {app_type:?} 代理占位符失败: {e}"))?;
+
         Ok(true)
     }
 

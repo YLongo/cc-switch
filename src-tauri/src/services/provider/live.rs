@@ -1017,8 +1017,15 @@ pub(crate) fn write_live_snapshot(app_type: &AppType, provider: &Provider) -> Re
     match app_type {
         AppType::Claude => {
             let path = get_claude_settings_path();
+            // 读取现有配置并合并，以保留用户在 settings.json 中手动添加的字段
+            let mut existing = if path.exists() {
+                read_json_file::<Value>(&path).unwrap_or(json!({}))
+            } else {
+                json!({})
+            };
             let settings = sanitize_claude_settings_for_live(&provider.settings_config);
-            write_json_file(&path, &settings)?;
+            json_deep_merge(&mut existing, &settings);
+            write_json_file(&path, &existing)?;
         }
         AppType::ClaudeDesktop => {
             return Err(AppError::localized(
@@ -1163,6 +1170,55 @@ pub(crate) fn write_live_snapshot(app_type: &AppType, provider: &Provider) -> Re
             log::debug!("Hermes provider '{}' written to live config", provider.id);
         }
     }
+    Ok(())
+}
+
+/// 从 live 配置文件中读取非受管字段，合并到 provider 的 settings_config 中，
+/// 使前端能同时展示 cc-switch 管理的数据和用户手动添加的字段。
+///
+/// 对于非累加模式的应用，live 文件中的顶层键若不存在于 provider 的 settings_config
+/// 中，则被合并进来。嵌套对象（如 `env`）也做同样处理：live 文件中 provider 未涉及的
+/// 子键被保留。
+pub(crate) fn augment_provider_with_live_config(
+    app_type: &AppType,
+    provider: &mut Provider,
+) -> Result<(), AppError> {
+    let settings_path = match app_type {
+        AppType::Claude => get_claude_settings_path(),
+        _ => return Ok(()),
+    };
+
+    if !settings_path.exists() {
+        return Ok(());
+    }
+
+    let live: Value = read_json_file(&settings_path)?;
+    let Some(live_obj) = live.as_object() else {
+        return Ok(());
+    };
+
+    let Some(provider_obj) = provider.settings_config.as_object_mut() else {
+        return Ok(());
+    };
+
+    for (key, live_val) in live_obj {
+        if !provider_obj.contains_key(key) {
+            // 字段完全由用户手动添加，直接合并
+            provider_obj.insert(key.clone(), live_val.clone());
+        } else if let (Some(provider_val), Some(live_val_obj)) =
+            (provider_obj.get_mut(key), live_val.as_object())
+        {
+            // 双方都有此字段且都是对象：合并子键（provider 已有优先）
+            if let Some(provider_val_obj) = provider_val.as_object_mut() {
+                for (sub_key, sub_val) in live_val_obj {
+                    if !provider_val_obj.contains_key(sub_key) {
+                        provider_val_obj.insert(sub_key.clone(), sub_val.clone());
+                    }
+                }
+            }
+        }
+    }
+
     Ok(())
 }
 

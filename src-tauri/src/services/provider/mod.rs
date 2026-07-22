@@ -2065,7 +2065,14 @@ impl ProviderService {
         state: &AppState,
         app_type: AppType,
     ) -> Result<IndexMap<String, Provider>, AppError> {
-        state.db.get_all_providers(app_type.as_str())
+        let mut providers = state.db.get_all_providers(app_type.as_str())?;
+        // 对于单供应商模式的应用，将 live 文件中的非受管字段合并到 provider 配置中
+        if !app_type.is_additive_mode() {
+            for (_, provider) in providers.iter_mut() {
+                let _ = live::augment_provider_with_live_config(&app_type, provider);
+            }
+        }
+        Ok(providers)
     }
 
     /// Get current provider ID

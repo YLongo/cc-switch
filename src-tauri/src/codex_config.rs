@@ -13,6 +13,18 @@ use std::fs;
 use std::process::{Command, Stdio};
 use toml_edit::DocumentMut;
 
+/// Codex config.toml 顶层键中由 cc-switch 管理的字段。
+/// 合并时清理不再使用的受管键，但保留用户手动添加的非受管键。
+const CODEX_MANAGED_TOML_KEYS: [&str; 7] = [
+    "model",
+    "model_provider",
+    "base_url",
+    "wire_api",
+    "experimental_bearer_token",
+    "model_catalog_json",
+    "web_search",
+];
+
 pub const CC_SWITCH_CODEX_MODEL_PROVIDER_ID: &str = "custom";
 /// Temporary model-provider id used while the built-in `codex-official`
 /// provider is routed through CC Switch.  A dedicated id is an ownership
@@ -243,20 +255,48 @@ pub fn write_codex_live_atomic(
         None
     };
 
-    // 准备写入内容
+    // 将 auth.json 和 config.toml 的写入顺序对调：先准备合并的 TOML 内容，
+    // 再依次写入两个文件
     let cfg_text = match config_text_opt {
         Some(s) => s.to_string(),
         None => String::new(),
     };
-    if !cfg_text.trim().is_empty() {
-        toml::from_str::<toml::Table>(&cfg_text).map_err(|e| AppError::toml(&config_path, e))?;
-    }
+    let merged_toml = if !cfg_text.trim().is_empty() {
+        let new_doc: DocumentMut = cfg_text
+            .parse()
+            .map_err(|e| AppError::Message(format!("Codex config.toml 解析失败: {e}")))?;
+        let mut doc: DocumentMut = if config_path.exists() {
+            std::fs::read_to_string(&config_path)
+                .map_err(|e| AppError::io(&config_path, e))?
+                .parse()
+                .unwrap_or_default()
+        } else {
+            DocumentMut::default()
+        };
+        let existing_keys: Vec<String> = doc.iter().map(|(k, _)| k.to_string()).collect();
+        let keys: Vec<String> = new_doc.iter().map(|(k, _)| k.to_string()).collect();
+        for key in keys {
+            if let Some(item) = new_doc.get(&key).cloned() {
+                doc.insert(&key, item);
+            }
+        }
+        // 清理不再由 cc-switch 管理的受管键（如 catalog 指针），
+        // 保留用户手动添加的非受管键
+        for key in existing_keys {
+            if CODEX_MANAGED_TOML_KEYS.contains(&key.as_str()) && !new_doc.contains_key(&key) {
+                doc.remove(&key);
+            }
+        }
+        doc.to_string()
+    } else {
+        String::new()
+    };
 
-    // 第一步：写 auth.json
+    // 第一步：写 auth.json（全量覆写，auth 状态由调用者控制）
     write_json_file(&auth_path, auth)?;
 
     // 第二步：写 config.toml（失败则回滚 auth.json）
-    if let Err(e) = write_text_file(&config_path, &cfg_text) {
+    if let Err(e) = write_text_file(&config_path, &merged_toml) {
         // 回滚 auth.json
         if let Some(bytes) = old_auth {
             let _ = atomic_write(&auth_path, &bytes);
@@ -324,11 +364,42 @@ pub fn write_codex_live_config_atomic(config_text_opt: Option<&str>) -> Result<(
         None => String::new(),
     };
 
-    if !cfg_text.trim().is_empty() {
-        toml::from_str::<toml::Table>(&cfg_text).map_err(|e| AppError::toml(&config_path, e))?;
+    let merged_toml = if !cfg_text.trim().is_empty() {
+        let new_doc: DocumentMut = cfg_text
+            .parse()
+            .map_err(|e| AppError::Message(format!("Codex config.toml 解析失败: {e}")))?;
+        let mut doc: DocumentMut = if config_path.exists() {
+            std::fs::read_to_string(&config_path)
+                .map_err(|e| AppError::io(&config_path, e))?
+                .parse()
+                .unwrap_or_default()
+        } else {
+            DocumentMut::default()
+        };
+        let existing_keys: Vec<String> = doc.iter().map(|(k, _)| k.to_string()).collect();
+        let keys: Vec<String> = new_doc.iter().map(|(k, _)| k.to_string()).collect();
+        for key in keys {
+            if let Some(item) = new_doc.get(&key).cloned() {
+                doc.insert(&key, item);
+            }
+        }
+        // 清理不再由 cc-switch 管理的受管键
+        for key in existing_keys {
+            if CODEX_MANAGED_TOML_KEYS.contains(&key.as_str()) && !new_doc.contains_key(&key) {
+                doc.remove(&key);
+            }
+        }
+        doc.to_string()
+    } else {
+        String::new()
+    };
+
+    if !merged_toml.trim().is_empty() {
+        toml::from_str::<toml::Table>(&merged_toml)
+            .map_err(|e| AppError::Message(format!("Codex config.toml 解析失败: {e}")))?;
     }
 
-    write_text_file(&config_path, &cfg_text)
+    write_text_file(&config_path, &merged_toml)
 }
 
 pub fn extract_codex_auth_api_key(auth: &Value) -> Option<String> {

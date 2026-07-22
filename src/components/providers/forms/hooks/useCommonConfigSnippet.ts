@@ -308,17 +308,33 @@ export function useCommonConfigSnippet({
     [commonConfigSnippet, settingsConfig, useCommonConfig, onConfigChange],
   );
 
+  // 防抖计时器：settingsConfig 变化后延迟检查是否包含通用配置片段
+  const settingsConfigCheckTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // 当配置变化时检查是否包含通用配置（但避免在通过通用配置更新时检查）
+  // 使用防抖：用户打字时不会频繁触发，checkbox 不会闪烁
   useEffect(() => {
     if (!enabled) return;
     if (isUpdatingFromCommonConfig.current || isLoading) {
       return;
     }
-    const hasCommon = hasCommonConfigSnippet(
-      settingsConfig,
-      commonConfigSnippet,
-    );
-    setUseCommonConfig(hasCommon);
+
+    if (settingsConfigCheckTimer.current) {
+      clearTimeout(settingsConfigCheckTimer.current);
+    }
+    settingsConfigCheckTimer.current = setTimeout(() => {
+      const hasCommon = hasCommonConfigSnippet(
+        settingsConfig,
+        commonConfigSnippet,
+      );
+      setUseCommonConfig(hasCommon);
+    }, 500);
+
+    return () => {
+      if (settingsConfigCheckTimer.current) {
+        clearTimeout(settingsConfigCheckTimer.current);
+      }
+    };
   }, [enabled, settingsConfig, commonConfigSnippet, isLoading]);
 
   // 从编辑器当前内容提取通用配置片段

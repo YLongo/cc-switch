@@ -1,5 +1,5 @@
 import { useTranslation } from "react-i18next";
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, memo } from "react";
 import { FullScreenPanel } from "@/components/common/FullScreenPanel";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
@@ -19,9 +19,11 @@ interface CommonConfigEditorProps {
   onModalClose: () => void;
   onExtract?: () => void;
   isExtracting?: boolean;
+  /** 是否使用深色主题；由父组件传递以避免内部 MutationObserver 重复触发重建 */
+  darkMode?: boolean;
 }
 
-export function CommonConfigEditor({
+export const CommonConfigEditor = memo(function CommonConfigEditor({
   value,
   onChange,
   useCommonConfig,
@@ -34,24 +36,9 @@ export function CommonConfigEditor({
   onModalClose,
   onExtract,
   isExtracting,
+  darkMode = false,
 }: CommonConfigEditorProps) {
   const { t } = useTranslation();
-  const [isDarkMode, setIsDarkMode] = useState(false);
-
-  useEffect(() => {
-    setIsDarkMode(document.documentElement.classList.contains("dark"));
-
-    const observer = new MutationObserver(() => {
-      setIsDarkMode(document.documentElement.classList.contains("dark"));
-    });
-
-    observer.observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["class"],
-    });
-
-    return () => observer.disconnect();
-  }, []);
 
   // Mirror value prop to local state so checkbox toggles and JsonEditor stay in sync
   // (parent uses form.getValues which doesn't trigger re-renders)
@@ -256,7 +243,7 @@ export function CommonConfigEditor({
     "ANTHROPIC_AUTH_TOKEN": "your-api-key-here"
   }
 }`}
-          darkMode={isDarkMode}
+          darkMode={darkMode}
           rows={14}
           showValidation={true}
           language="json"
@@ -336,7 +323,7 @@ export function CommonConfigEditor({
     "ANTHROPIC_BASE_URL": "https://your-api-endpoint.com"
   }
 }`}
-            darkMode={isDarkMode}
+            darkMode={darkMode}
             rows={16}
             showValidation={true}
             language="json"
@@ -350,4 +337,4 @@ export function CommonConfigEditor({
       </FullScreenPanel>
     </>
   );
-}
+});

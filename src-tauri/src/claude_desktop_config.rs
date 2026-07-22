@@ -1004,7 +1004,16 @@ fn apply_provider_to_paths_inner(
 
     write_deployment_mode(&paths.normal_config_path, "3p")?;
     write_deployment_mode(&paths.threep_config_path, "3p")?;
-    write_json_file(&paths.profile_path, &profile)?;
+    // 合并现有 profile 文件：仅覆盖 cc-switch 管理的字段（inferenceGatewayBaseUrl、
+    // inferenceGatewayApiKey、inferenceModels 等），保留用户手动添加的其他字段
+    let profile_path = &paths.profile_path;
+    let mut existing = if profile_path.exists() {
+        read_json_file(profile_path).unwrap_or(json!({}))
+    } else {
+        json!({})
+    };
+    merge_json_into(&mut existing, &profile);
+    write_json_file(profile_path, &existing)?;
     write_meta(&paths.meta_path, Some(PROFILE_ID))?;
 
     Ok(())
@@ -1056,6 +1065,15 @@ fn read_json_or_empty(path: &Path) -> Result<Value, AppError> {
         Ok(value)
     } else {
         Ok(json!({}))
+    }
+}
+
+/// 合并 source 对象字段到 target 中，保留 target 中 source 未涉及的现有字段。
+fn merge_json_into(target: &mut Value, source: &Value) {
+    if let (Some(target_obj), Some(source_obj)) = (target.as_object_mut(), source.as_object()) {
+        for (k, v) in source_obj {
+            target_obj.insert(k.clone(), v.clone());
+        }
     }
 }
 

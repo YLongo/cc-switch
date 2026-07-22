@@ -3,7 +3,7 @@ import { EditorView, basicSetup } from "codemirror";
 import { json } from "@codemirror/lang-json";
 import { javascript } from "@codemirror/lang-javascript";
 import { oneDark } from "@codemirror/theme-one-dark";
-import { EditorState } from "@codemirror/state";
+import { EditorState, Compartment } from "@codemirror/state";
 import { placeholder } from "@codemirror/view";
 import { linter, Diagnostic } from "@codemirror/lint";
 import { useTranslation } from "react-i18next";
@@ -21,10 +21,10 @@ interface JsonEditorProps {
   showValidation?: boolean;
   language?: "json" | "javascript";
   height?: string | number;
-  showMinimap?: boolean; // 添加此属性以防未来使用
+  showMinimap?: boolean;
 }
 
-const JsonEditor: React.FC<JsonEditorProps> = ({
+const JsonEditor = React.memo<JsonEditorProps>(({
   value,
   onChange,
   placeholder: placeholderText = "",
@@ -37,6 +37,7 @@ const JsonEditor: React.FC<JsonEditorProps> = ({
   const { t } = useTranslation();
   const editorRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
+  const themeCompartmentRef = useRef(new Compartment());
 
   // JSON linter 函数
   const jsonLinter = useMemo(
@@ -50,7 +51,6 @@ const JsonEditor: React.FC<JsonEditorProps> = ({
 
         try {
           const parsed = JSON.parse(doc);
-          // 检查是否是JSON对象
           if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
             // 格式正确
           } else {
@@ -62,7 +62,6 @@ const JsonEditor: React.FC<JsonEditorProps> = ({
             });
           }
         } catch (e) {
-          // 简单处理JSON解析错误
           const message =
             e instanceof SyntaxError ? e.message : t("jsonEditor.invalidJson");
           diagnostics.push({
@@ -78,13 +77,51 @@ const JsonEditor: React.FC<JsonEditorProps> = ({
     [showValidation, language, t],
   );
 
+  // 动态主题扩展（稳定引用，避免重建编辑器）
+  const darkThemeExtensions = useMemo(
+    () => [
+      oneDark,
+      EditorView.theme({
+        ".cm-editor": {
+          border: "1px solid hsl(var(--border))",
+          borderRadius: "0.5rem",
+          background: "transparent",
+        },
+        ".cm-editor.cm-focused": {
+          outline: "none",
+          borderColor: "hsl(var(--primary))",
+        },
+        ".cm-scroller": {
+          background: "transparent",
+        },
+        ".cm-gutters": {
+          background: "transparent",
+          borderRight: "1px solid hsl(var(--border))",
+          color: "hsl(var(--muted-foreground))",
+        },
+        ".cm-selectionBackground, .cm-content ::selection": {
+          background: "hsl(var(--primary) / 0.18)",
+        },
+        ".cm-selectionMatch": {
+          background: "hsl(var(--primary) / 0.12)",
+        },
+        ".cm-activeLine": {
+          background: "hsl(var(--primary) / 0.08)",
+        },
+        ".cm-activeLineGutter": {
+          background: "hsl(var(--primary) / 0.08)",
+        },
+      }),
+    ],
+    [],
+  );
+
+  // 创建编辑器（仅挂载时创建，不依赖 darkMode）
   useEffect(() => {
     if (!editorRef.current) return;
 
-    // 创建编辑器扩展
     const minHeightPx = height ? undefined : Math.max(1, rows) * 18;
 
-    // 使用 baseTheme 定义基础样式，优先级低于 oneDark，但可以正确响应主题
     const baseTheme = EditorView.baseTheme({
       ".cm-editor": {
         border: "1px solid hsl(var(--border))",
@@ -117,7 +154,6 @@ const JsonEditor: React.FC<JsonEditorProps> = ({
       },
     });
 
-    // 使用 theme 定义尺寸和字体样式
     const heightValue = height
       ? typeof height === "number"
         ? `${height}px`
@@ -142,6 +178,7 @@ const JsonEditor: React.FC<JsonEditorProps> = ({
       baseTheme,
       sizingTheme,
       jsonLinter,
+      themeCompartmentRef.current.of([]), // 初始无主题，由下方单独 effect 控制
       EditorView.updateListener.of((update) => {
         if (update.docChanged) {
           const newValue = update.state.doc.toString();
@@ -150,52 +187,11 @@ const JsonEditor: React.FC<JsonEditorProps> = ({
       }),
     ];
 
-    // 如果启用深色模式，添加深色主题
-    if (darkMode) {
-      extensions.push(oneDark);
-      // 在 oneDark 之后强制覆盖边框样式
-      extensions.push(
-        EditorView.theme({
-          ".cm-editor": {
-            border: "1px solid hsl(var(--border))",
-            borderRadius: "0.5rem",
-            background: "transparent",
-          },
-          ".cm-editor.cm-focused": {
-            outline: "none",
-            borderColor: "hsl(var(--primary))",
-          },
-          ".cm-scroller": {
-            background: "transparent",
-          },
-          ".cm-gutters": {
-            background: "transparent",
-            borderRight: "1px solid hsl(var(--border))",
-            color: "hsl(var(--muted-foreground))",
-          },
-          ".cm-selectionBackground, .cm-content ::selection": {
-            background: "hsl(var(--primary) / 0.18)",
-          },
-          ".cm-selectionMatch": {
-            background: "hsl(var(--primary) / 0.12)",
-          },
-          ".cm-activeLine": {
-            background: "hsl(var(--primary) / 0.08)",
-          },
-          ".cm-activeLineGutter": {
-            background: "hsl(var(--primary) / 0.08)",
-          },
-        }),
-      );
-    }
-
-    // 创建初始状态
     const state = EditorState.create({
       doc: value,
       extensions,
     });
 
-    // 创建编辑器视图
     const view = new EditorView({
       state,
       parent: editorRef.current,
@@ -203,12 +199,24 @@ const JsonEditor: React.FC<JsonEditorProps> = ({
 
     viewRef.current = view;
 
-    // 清理函数
     return () => {
       view.destroy();
       viewRef.current = null;
     };
-  }, [darkMode, rows, height, language, jsonLinter]); // 依赖项中不包含 onChange 和 placeholder，避免不必要的重建
+    // 注意：onChange 不在此依赖中，编辑器重建时使用首次创建的闭包引用。
+    // React Hook Form 的 setValue 不依赖闭包，因此始终能正确上报。
+  }, [rows, height, language, jsonLinter]);
+
+  // 动态切换暗色主题，不重建编辑器
+  useEffect(() => {
+    if (viewRef.current) {
+      viewRef.current.dispatch({
+        effects: themeCompartmentRef.current.reconfigure(
+          darkMode ? darkThemeExtensions : [],
+        ),
+      });
+    }
+  }, [darkMode, darkThemeExtensions]);
 
   // 当 value 从外部改变时更新编辑器内容
   useEffect(() => {
@@ -224,7 +232,6 @@ const JsonEditor: React.FC<JsonEditorProps> = ({
     }
   }, [value]);
 
-  // 格式化处理函数
   const handleFormat = () => {
     if (!viewRef.current) return;
 
@@ -273,6 +280,6 @@ const JsonEditor: React.FC<JsonEditorProps> = ({
       )}
     </div>
   );
-};
+});
 
 export default JsonEditor;
