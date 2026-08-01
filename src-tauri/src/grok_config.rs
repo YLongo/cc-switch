@@ -411,9 +411,9 @@ pub fn write_grok_live_settings(settings: &Value) -> Result<(), AppError> {
     // 合并现有 config.toml：仅覆盖/新增 cc-switch 管理的 [model] 等字段，
     // 保留用户手动添加的其他 TOML 字段
     let path = get_grok_config_path();
-    let new_doc: DocumentMut = config.parse().map_err(|e| {
-        AppError::Message(format!("Grok Build TOML 解析失败: {e}"))
-    })?;
+    let new_doc: DocumentMut = config
+        .parse()
+        .map_err(|e| AppError::Message(format!("Grok Build TOML 解析失败: {e}")))?;
     let mut doc: DocumentMut = if path.exists() {
         std::fs::read_to_string(&path)
             .map_err(|e| AppError::io(&path, e))?

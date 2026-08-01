@@ -214,7 +214,7 @@ impl ConfigService {
         provider_id: &str,
         provider: &Provider,
     ) -> Result<(), AppError> {
-        use crate::config::{read_json_file, write_json_file};
+        use crate::config::read_json_file;
 
         let settings_path = crate::config::get_claude_settings_path();
         if let Some(parent) = settings_path.parent() {
@@ -222,7 +222,7 @@ impl ConfigService {
         }
 
         let settings = sanitize_claude_settings_for_live(&provider.settings_config);
-        write_json_file(&settings_path, &settings)?;
+        crate::services::provider::write_merged_claude_live(&settings)?;
 
         let live_after = read_json_file::<serde_json::Value>(&settings_path)?;
         if let Some(manager) = config.get_manager_mut(&AppType::Claude) {

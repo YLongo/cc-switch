@@ -1012,6 +1012,19 @@ impl LiveSnapshot {
     }
 }
 
+pub(crate) fn write_merged_claude_live(settings: &Value) -> Result<(), AppError> {
+    let path = get_claude_settings_path();
+    let mut existing = if path.exists() {
+        read_json_file::<Value>(&path).unwrap_or_else(|_| json!({}))
+    } else {
+        json!({})
+    };
+
+    let sanitized = sanitize_claude_settings_for_live(settings);
+    json_deep_merge(&mut existing, &sanitized);
+    write_json_file(&path, &existing)
+}
+
 /// Write live configuration snapshot for a provider
 pub(crate) fn write_live_snapshot(app_type: &AppType, provider: &Provider) -> Result<(), AppError> {
     match app_type {
