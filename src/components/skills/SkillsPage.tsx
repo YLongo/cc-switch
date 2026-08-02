@@ -29,6 +29,7 @@ import {
   useDiscoverableSkills,
   useInstalledSkills,
   useInstallSkill,
+  useUninstallSkill,
   useSkillRepos,
   useAddSkillRepo,
   useRemoveSkillRepo,
@@ -37,10 +38,12 @@ import {
 import type { AppId } from "@/lib/api/types";
 import type {
   DiscoverableSkill,
+  InstalledSkill,
   SkillRepo,
   SkillsShDiscoverableSkill,
 } from "@/lib/api/skills";
 import { formatSkillError } from "@/lib/errors/skillErrorParser";
+import { ConfirmDialog } from "@/components/ConfirmDialog";
 
 export type SkillsPageSource = "repos" | "skillssh";
 
@@ -94,6 +97,14 @@ export const SkillsPage = forwardRef<SkillsPageHandle, SkillsPageProps>(
   ({ initialApp = "claude", onSourceChange }, ref) => {
     const { t } = useTranslation();
     const [repoManagerOpen, setRepoManagerOpen] = useState(false);
+    const [confirmDialog, setConfirmDialog] = useState<{
+      isOpen: boolean;
+      title: string;
+      message: string;
+      confirmText?: string;
+      variant?: "destructive" | "info";
+      onConfirm: () => void;
+    } | null>(null);
     const [searchQuery, setSearchQuery] = useState("");
     const [filterRepo, setFilterRepo] = useState<string>("all");
     const [filterStatus, setFilterStatus] = useState<
@@ -153,6 +164,7 @@ export const SkillsPage = forwardRef<SkillsPageHandle, SkillsPageProps>(
 
     // Mutations
     const installMutation = useInstallSkill();
+    const uninstallMutation = useUninstallSkill();
     const addRepoMutation = useAddSkillRepo();
     const removeRepoMutation = useRemoveSkillRepo();
 
@@ -167,6 +179,21 @@ export const SkillsPage = forwardRef<SkillsPageHandle, SkillsPageProps>(
           return `${s.directory.toLowerCase()}:${owner}:${name}`;
         }),
       );
+    }, [installedSkills]);
+
+    // 已安装 skill 按组合 key（directory + repoOwner + repoName）索引，供发现面板直接卸载
+    const installedByKey = useMemo(() => {
+      const map = new Map<string, InstalledSkill>();
+      if (!installedSkills) return map;
+      for (const s of installedSkills) {
+        const installName =
+          s.directory.split(/[/\\]/).pop()?.toLowerCase() ||
+          s.directory.toLowerCase();
+        const owner = s.repoOwner?.toLowerCase() || "";
+        const name = s.repoName?.toLowerCase() || "";
+        map.set(`${installName}:${owner}:${name}`, s);
+      }
+      return map;
     }, [installedSkills]);
 
     type DiscoverableSkillItem = DiscoverableSkill & { installed: boolean };
@@ -274,9 +301,60 @@ export const SkillsPage = forwardRef<SkillsPageHandle, SkillsPageProps>(
       }
     };
 
-    const handleUninstall = async (_directory: string) => {
-      // 在发现面板中，不支持卸载，需要在主面板中操作
-      toast.info(t("skills.uninstallInMainPanel"));
+    const handleUninstall = async (key: string) => {
+      // 找到对应的可发现技能（仓库模式或 skills.sh 模式）
+      let skill: DiscoverableSkill | undefined;
+
+      if (searchSource === "skillssh") {
+        const found = accumulatedResults.find((s) => s.key === key);
+        if (found) {
+          skill = toDiscoverableSkill(found);
+        }
+      } else {
+        skill = discoverableSkills?.find((s) => s.key === key);
+      }
+
+      if (!skill) {
+        toast.error(t("skills.notFound"));
+        return;
+      }
+
+      // 匹配已安装的技能记录（获取卸载所需的 id）
+      const installName =
+        skill.directory.split(/[/\\]/).pop()?.toLowerCase() ||
+        skill.directory.toLowerCase();
+      const matchKey = `${installName}:${skill.repoOwner.toLowerCase()}:${skill.repoName.toLowerCase()}`;
+      const installed = installedByKey.get(matchKey);
+      if (!installed) {
+        toast.error(t("skills.notInstalled"));
+        return;
+      }
+
+      setConfirmDialog({
+        isOpen: true,
+        title: t("skills.uninstall"),
+        message: t("skills.uninstallConfirm", { name: skill.name }),
+        variant: "destructive",
+        onConfirm: async () => {
+          try {
+            // 构建 skillKey 用于更新 discoverable 缓存
+            const skillKey = `${installName}:${skill.repoOwner.toLowerCase()}:${skill.repoName.toLowerCase()}`;
+            const result = await uninstallMutation.mutateAsync({
+              id: installed.id,
+              skillKey,
+            });
+            setConfirmDialog(null);
+            toast.success(t("skills.uninstallSuccess", { name: skill.name }), {
+              description: result.backupPath
+                ? t("skills.backup.location", { path: result.backupPath })
+                : undefined,
+              closeButton: true,
+            });
+          } catch (error) {
+            toast.error(t("common.error"), { description: String(error) });
+          }
+        },
+      });
     };
 
     const handleAddRepo = async (repo: SkillRepo) => {
@@ -655,6 +733,19 @@ export const SkillsPage = forwardRef<SkillsPageHandle, SkillsPageProps>(
             onClose={() => setRepoManagerOpen(false)}
           />
         )}
+
+        {/* 卸载确认对话框 */}
+        <ConfirmDialog
+          isOpen={Boolean(confirmDialog)}
+          title={confirmDialog?.title || ""}
+          message={confirmDialog?.message || ""}
+          confirmText={confirmDialog?.confirmText}
+          variant={confirmDialog?.variant || "destructive"}
+          onConfirm={() => {
+            confirmDialog?.onConfirm();
+          }}
+          onCancel={() => setConfirmDialog(null)}
+        />
       </div>
     );
   },

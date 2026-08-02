@@ -73,6 +73,9 @@ vi.mock("@/hooks/useSkills", () => ({
   useInstallSkill: () => ({
     mutateAsync: installMutateAsyncMock,
   }),
+  useUninstallSkill: () => ({
+    mutateAsync: vi.fn(),
+  }),
   useSkillRepos: () => ({
     data: skillReposMock,
     refetch: vi.fn(),
