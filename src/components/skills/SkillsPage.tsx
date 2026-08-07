@@ -337,12 +337,10 @@ export const SkillsPage = forwardRef<SkillsPageHandle, SkillsPageProps>(
         variant: "destructive",
         onConfirm: async () => {
           try {
-            // 构建 skillKey 用于更新 discoverable 缓存
-            const skillKey = `${installName}:${skill.repoOwner.toLowerCase()}:${skill.repoName.toLowerCase()}`;
-            const result = await uninstallMutation.mutateAsync({
-              id: installed.id,
-              skillKey,
-            });
+            // main 的 useUninstallSkill 自动 invalidate 相关缓存
+            // （installed/updates 在 onSuccess，backups/unmanaged 在 onSettled），
+            // 不再需要手动传 skillKey 来更新 discoverable 列表
+            const result = await uninstallMutation.mutateAsync(installed.id);
             setConfirmDialog(null);
             toast.success(t("skills.uninstallSuccess", { name: skill.name }), {
               description: result.backupPath
