@@ -244,7 +244,7 @@ export const CommonConfigEditor = memo(function CommonConfigEditor({
   }
 }`}
           darkMode={darkMode}
-          rows={14}
+          rows={3}
           showValidation={true}
           language="json"
         />
