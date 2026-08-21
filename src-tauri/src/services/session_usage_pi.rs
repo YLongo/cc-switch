@@ -749,14 +749,16 @@ fn hash_field(hasher: &mut Sha256, value: &[u8]) {
 }
 
 fn insert_pi_record(conn: &rusqlite::Connection, record: &PiUsageRecord) -> Result<bool, AppError> {
+    // 两个 EXISTS 各自完整命中一个索引（主键与 idx_session_usage_dedup_semantic），
+    // 避免合并 OR 后索引只约束 data_source、对账本内全部行回表扫描的 O(N²) 退化。
     let already_seen: bool = conn
         .query_row(
             "SELECT EXISTS(
                 SELECT 1 FROM session_usage_dedup
-                WHERE data_source = ?1 AND (
-                    request_id = ?2 OR
-                    (semantic_id = ?3 AND (?4 = 0 OR has_entry_id = 0))
-                )
+                WHERE data_source = ?1 AND request_id = ?2
+            ) OR EXISTS(
+                SELECT 1 FROM session_usage_dedup
+                WHERE data_source = ?1 AND semantic_id = ?3 AND (?4 = 0 OR has_entry_id = 0)
             )",
             rusqlite::params![
                 DATA_SOURCE,
