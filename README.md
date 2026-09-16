@@ -2,7 +2,7 @@
 
 # CC Switch
 
-### Claude Code、Claude Desktop、Codex、Gemini CLI、Grok Build、OpenCode、OpenClaw 和 Hermes Agent 的全方位管理工具
+### Claude Code、Claude Desktop、Codex、Gemini CLI、Grok Build、OpenCode、OpenClaw、Hermes Agent 和 MiniMax Code 的全方位管理工具
 
 [![Version](https://img.shields.io/github/v/release/farion1231/cc-switch?color=blue&label=version)](https://github.com/farion1231/cc-switch/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/farion1231/cc-switch/releases)
@@ -95,8 +95,8 @@ Claude Code / Codex / Gemini 官方渠道低至 3.8 / 0.2 / 0.9 折，充值更�
 </tr>
 
 <tr>
-<td width="180"><a href="https://apikey.fun/register?aff=CCSwitch"><img src="assets/partners/logos/apikey_banner.png" alt="APIKEY.FUN" width="150"></a></td>
-<td>感谢 APIKEY.FUN 赞助本项目！APIKEY.FUN 是一家专业的企业级 AI 中转站，致力于为企业和个人开发者提供稳定、高效、低成本的 AI 模型 API 接入服务。平台支持 Claude、OpenAI、Gemini 等主流热门模型，价格低至官方原价的 7%。通过本项目<a href="https://apikey.fun/register?aff=CCSwitch">专属链接</a>注册，还可享受最高 <strong>充值永久 95 折</strong> 专属优惠。</td>
+<td width="180"><a href="https://apikey.fan/register?aff=CCSwitch"><img src="assets/partners/logos/apikey_banner.png" alt="APIKEY.FUN" width="150"></a></td>
+<td>感谢 APIKEY.FUN 赞助本项目！APIKEY.FUN 是一家专业的企业级 AI 中转站，致力于为企业和个人开发者提供稳定、高效、低成本的 AI 模型 API 接入服务。平台支持 Claude、OpenAI、Gemini 等主流热门模型，价格低至官方原价的 7%。通过本项目<a href="https://apikey.fan/register?aff=CCSwitch">专属链接</a>注册，还可享受最高 <strong>充值永久 95 折</strong> 专属优惠。</td>
 </tr>
 
 <tr>
@@ -152,11 +152,6 @@ TeamoRouter 还提供企业级功能，包括集中账单、团队管理、BYOK�
 </tr>
 
 <tr>
-<td width="180"><a href="https://www.atlascloud.ai/coding-plan?utm_source=github&utm_campaign=cc-switch"><img src="assets/partners/logos/atlascloud_banner.png" alt="Atlas Cloud" width="150"></a></td>
-<td>Atlas Cloud 是一个全模态 AI 推理平台，通过单一 API 为开发者提供视频生成、图像生成及 LLM 接入。免去繁琐的多供应商对接，一次连接即可调用 300+ 款全模态精选模型。立即查看 Atlas Cloud 全新<a href="https://www.atlascloud.ai/coding-plan?utm_source=github&utm_campaign=cc-switch">“编程计划”</a>优惠，获取更具性价比的 API 接入！</td>
-</tr>
-
-<tr>
 <td width="180"><a href="https://www.compshare.cn/coding-plan?ytag=GPU_YY_YX_git_cc-switch"><img src="assets/partners/logos/ucloud.png" alt="优云智算" width="150"></a></td>
 <td>感谢优云智算赞助了本项目！优云智算是UCloud旗下AI云平台，提供稳定、全面的国内外模型API，仅一个key即可调用。主打包月、按次的高性价比 国模Coding Plan套餐，同时提供官转稳定海外模型。支持接入 Claude Code、Codex 及 API 调用。支持企业高并发、7*24技术支持、自助开票。通过<a href="https://www.compshare.cn/coding-plan?ytag=GPU_YY_YX_git_cc-switch">此链接</a>注册的用户，可得免费5元平台体验金！</td>
 </tr>
@@ -169,6 +164,11 @@ TeamoRouter 还提供企业级功能，包括集中账单、团队管理、BYOK�
 <tr>
 <td width="180"><a href="https://www.sssaicode.com/register?ref=DCP0SM"><img src="assets/partners/logos/sssaicode.png" alt="SSSAiCode" width="150"></a></td>
 <td>感谢 SSSAiCode 赞助了本项目！SSSAiCode 是一家稳定可靠的API中转站，致力于提供稳定、可靠、平价的Claude、CodeX模型服务，支持当日快速开票，SSSAiCode为本软件的用户提供特别优惠，使用<a href="https://www.sssaicode.com/register?ref=DCP0SM">此链接</a>注册每次充值均可享受10$的额外奖励！</td>
+</tr>
+
+<tr>
+<td width="180"><a href="https://soleapi.com/r/ccswitch"><img src="assets/partners/logos/soleapi-banner.png" alt="SoleAPI" width="150"></a></td>
+<td>Thanks to SoleAPI for supporting this project! SoleAPI is an AI model gateway for developers and enterprises: one API key gives you access to 30+ leading models including Claude, GPT and Gemini. It is natively compatible with the OpenAI and Anthropic protocols, so Claude Code, Codex, Cursor and your existing SDKs work by simply changing the Base URL. Requests are routed in real time by latency and upstream health, with millisecond-level automatic failover to backup channels, 99.99% service availability and 24/7 technical support. Every call lands on a single bill with per-request token and cost breakdowns you can inspect at any time. Sign up through this project's <a href="https://soleapi.com/r/ccswitch">referral link</a> to receive free trial credits, and earn ongoing cashback by inviting friends who top up!</td>
 </tr>
 
 <tr>
@@ -208,13 +208,13 @@ TeamoRouter 还提供企业级功能，包括集中账单、团队管理、BYOK�
 
 ## 为什么选择 CC Switch？
 
-现代 AI 编程依赖于 Claude Code、Claude Desktop、Codex、Gemini CLI、Grok Build、OpenCode、OpenClaw 和 Hermes 等工具——但每个工具都有自己的配置格式。切换 API 供应商意味着手动编辑 JSON、TOML 或 `.env` 文件，而在多个工具之间缺乏一个统一管理 MCP, SKILLS 的方式。
+现代 AI 编程依赖于 Claude Code、Claude Desktop、Codex、Gemini CLI、Grok Build、OpenCode、OpenClaw、Hermes 和 MiniMax Code 等工具——但每个工具都有自己的配置格式。切换 API 供应商意味着手动编辑 JSON、TOML 或 `.env` 文件，而在多个工具之间缺乏一个统一管理 MCP, SKILLS 的方式。
 
 **CC Switch** 为你提供一个桌面应用来管理所有支持的 AI 工具。无需手动编辑配置文件，你将获得一个可视化界面，一键将供应商导入应用，一键在不同的供应商之间进行切换，内置 50+ 供应商预设、统一的 MCP, SKILLS 管理以及系统托盘即时切换功能——所有操作都基于可靠的 SQLite 数据库和原子写入机制，保护你的配置不被损坏。
 
-- **一个应用，八个工具** — 在单一界面中管理 Claude Code、Claude Desktop、Codex、Gemini CLI、Grok Build、OpenCode、OpenClaw 和 Hermes
+- **一个应用，九个工具** — 在单一界面中管理 Claude Code、Claude Desktop、Codex、Gemini CLI、Grok Build、OpenCode、OpenClaw、Hermes 和 MiniMax Code
 - **告别手动编辑** — 50+ 供应商预设，包括 AWS Bedrock、NVIDIA NIM 和社区中转服务；一键即可切换
-- **统一 MCP, SKILLS 管理** — 一个面板管理 Claude、Codex、Gemini、Grok Build、OpenCode 和 Hermes 的 MCP, SKILLS, 支持双向同步
+- **统一 MCP, SKILLS 管理** — 一个面板管理 Claude、Codex、Gemini、Grok Build、OpenCode、Hermes 和 MiniMax Code 的 MCP, SKILLS, 支持双向同步
 - **系统托盘快速切换** — 从托盘菜单即时切换供应商，无需打开完整应用
 - **云同步** — 通过 Dropbox、OneDrive、iCloud 或 WebDAV 服务器在不同设备之间同步供应商数据
 - **跨平台** — 基于 Tauri 2 构建的原生桌面应用，支持 Windows、macOS 和 Linux
@@ -232,7 +232,7 @@ TeamoRouter 还提供企业级功能，包括集中账单、团队管理、BYOK�
 
 ### 供应商管理
 
-- **8 个支持工具，50+ 预设** — Claude Code、Claude Desktop、Codex、Gemini CLI、Grok Build、OpenCode、OpenClaw、Hermes；复制 key 即可一键导入
+- **9 个支持工具，50+ 预设** — Claude Code、Claude Desktop、Codex、Gemini CLI、Grok Build、OpenCode、OpenClaw、Hermes、MiniMax Code；复制 key 即可一键导入
 - **通用供应商** — 一份配置同步到 Claude Code、Codex 和 Gemini CLI
 - 一键切换、系统托盘快速访问、拖拽排序、导入导出
 
@@ -243,7 +243,7 @@ TeamoRouter 还提供企业级功能，包括集中账单、团队管理、BYOK�
 
 ### MCP、Prompts 与 Skills
 
-- **统一 MCP 面板** — 管理 Claude、Codex、Gemini、Grok Build、OpenCode 和 Hermes 的 MCP 服务器，双向同步，支持 Deep Link 导入
+- **统一 MCP 面板** — 管理 Claude、Codex、Gemini、Grok Build、OpenCode、Hermes 和 MiniMax Code 的 MCP 服务器，双向同步，支持 Deep Link 导入
 - **Prompts** — Markdown 编辑器，跨应用同步（CLAUDE.md / AGENTS.md / GEMINI.md），回填保护
 - **Skills** — 从 GitHub 仓库或 ZIP 文件一键安装，自定义仓库管理，支持软连接和文件复制
 
@@ -267,7 +267,7 @@ TeamoRouter 还提供企业级功能，包括集中账单、团队管理、BYOK�
 <details>
 <summary><strong>CC Switch 支持哪些 AI 工具？</strong></summary>
 
-CC Switch 支持八个工具：**Claude Code**、**Claude Desktop**、**Codex**、**Gemini CLI**、**Grok Build**、**OpenCode**、**OpenClaw** 和 **Hermes**。每个工具都有专属的供应商预设和配置管理。
+CC Switch 支持九个工具：**Claude Code**、**Claude Desktop**、**Codex**、**Gemini CLI**、**Grok Build**、**OpenCode**、**OpenClaw**、**Hermes**、**MiniMax Code**。每个工具都有专属的供应商预设和配置管理。
 
 </details>
 
@@ -565,7 +565,8 @@ pnpm test:unit --coverage
 │   ├── lib/
 │   │   ├── api/                # Tauri API 封装（类型安全）
 │   │   └── query/              # TanStack Query 配置
-│   ├── locales/                # 翻译 (zh/zh-TW/en/ja)
+│   ├── i18n/                   # 国际化
+│   │   └── locales/            # 翻译 (zh/zh-TW/en/ja)
 │   ├── config/                 # 预设 (providers/mcp)
 │   └── types/                  # TypeScript 类型定义
 ├── src-tauri/                  # 后端 (Rust)

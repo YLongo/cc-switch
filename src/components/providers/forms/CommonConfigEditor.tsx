@@ -72,6 +72,9 @@ export const CommonConfigEditor = memo(function CommonConfigEditor({
         disableAutoUpgrade:
           config?.env?.DISABLE_AUTOUPDATER === "1" ||
           config?.env?.DISABLE_AUTOUPDATER === 1,
+        disableArtifact:
+          config?.env?.CLAUDE_CODE_DISABLE_ARTIFACT === "1" ||
+          config?.env?.CLAUDE_CODE_DISABLE_ARTIFACT === 1,
       };
     } catch {
       return {
@@ -80,6 +83,7 @@ export const CommonConfigEditor = memo(function CommonConfigEditor({
         enableToolSearch: false,
         effortMax: false,
         disableAutoUpgrade: false,
+        disableArtifact: false,
       };
     }
   }, [localValue]);
@@ -130,6 +134,18 @@ export const CommonConfigEditor = memo(function CommonConfigEditor({
               config.env.DISABLE_AUTOUPDATER = "1";
             } else {
               delete config.env.DISABLE_AUTOUPDATER;
+              if (Object.keys(config.env).length === 0) delete config.env;
+            }
+            break;
+          case "disableArtifact":
+            // 第三方网关（如 DeepSeek）用严格 JSON Schema 校验工具定义，
+            // Artifact 工具灰度中的 \p{..} 正则会让每个请求 400；
+            // 该变量让 Claude Code 压根不把 Artifact 放进 tools 数组。
+            if (!config.env) config.env = {};
+            if (checked) {
+              config.env.CLAUDE_CODE_DISABLE_ARTIFACT = "1";
+            } else {
+              delete config.env.CLAUDE_CODE_DISABLE_ARTIFACT;
               if (Object.keys(config.env).length === 0) delete config.env;
             }
             break;
@@ -232,6 +248,17 @@ export const CommonConfigEditor = memo(function CommonConfigEditor({
               className="w-4 h-4 text-blue-500 bg-white dark:bg-gray-800 border-border-default rounded focus:ring-blue-500 dark:focus:ring-blue-400 focus:ring-2"
             />
             <span>{t("claudeConfig.disableAutoUpgrade")}</span>
+          </label>
+          <label className="inline-flex items-center gap-2 text-sm text-muted-foreground cursor-pointer">
+            <input
+              type="checkbox"
+              checked={toggleStates.disableArtifact}
+              onChange={(e) =>
+                handleToggle("disableArtifact", e.target.checked)
+              }
+              className="w-4 h-4 text-blue-500 bg-white dark:bg-gray-800 border-border-default rounded focus:ring-blue-500 dark:focus:ring-blue-400 focus:ring-2"
+            />
+            <span>{t("claudeConfig.disableArtifact")}</span>
           </label>
         </div>
         <JsonEditor
