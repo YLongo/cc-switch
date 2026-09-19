@@ -23,13 +23,13 @@ const bulkToggleSkillAppMock = vi.fn();
 const checkUpdatesMock = vi.fn();
 const updateSkillMock = vi.fn();
 const refetchSkillBackupsMock = vi.fn();
-const { toastErrorMock, toastSuccessMock, toastWarningMock } = vi.hoisted(
-  () => ({
+const { toastErrorMock, toastSuccessMock, toastWarningMock, toastInfoMock } =
+  vi.hoisted(() => ({
     toastErrorMock: vi.fn(),
     toastSuccessMock: vi.fn(),
     toastWarningMock: vi.fn(),
-  }),
-);
+    toastInfoMock: vi.fn(),
+  }));
 let installedSkillsMock: InstalledSkill[] = [];
 let skillBackupsMock: SkillBackupEntry[] = [];
 let skillUpdatesMock: SkillUpdateInfo[] = [];
@@ -48,7 +48,7 @@ vi.mock("sonner", () => ({
     success: toastSuccessMock,
     error: toastErrorMock,
     warning: toastWarningMock,
-    info: vi.fn(),
+    info: toastInfoMock,
   },
 }));
 
@@ -672,6 +672,117 @@ describe("UnifiedSkillsPanel", () => {
       expect(updateSkillMock).toHaveBeenCalledTimes(1);
       expect(updateSkillMock).toHaveBeenCalledWith("installed-id");
     });
+  });
+
+  it("shows per-status badges for remotely deleted skills and skips them in update all", async () => {
+    installedSkillsMock = [
+      makeInstalledSkill({ id: "gone-repo" }),
+      makeInstalledSkill({ id: "gone-dir" }),
+      makeInstalledSkill({ id: "stuck" }),
+      makeInstalledSkill({ id: "fine" }),
+    ];
+    skillUpdatesMock = [
+      {
+        id: "gone-repo",
+        name: "Gone Repo",
+        remoteHash: "",
+        status: "repo_deleted",
+      },
+      {
+        id: "gone-dir",
+        name: "Gone Dir",
+        remoteHash: "",
+        status: "skill_deleted",
+      },
+      { id: "stuck", name: "Stuck", remoteHash: "", status: "unreachable" },
+      { id: "fine", name: "Fine", remoteHash: "new" },
+    ];
+    renderPanel();
+
+    // 每个非 update 状态显示各自的徽章，普通更新仍是原徽章
+    expect(screen.getByText("skills.statusRepoDeleted")).toBeInTheDocument();
+    expect(screen.getByText("skills.statusSkillDeleted")).toBeInTheDocument();
+    expect(screen.getByText("skills.statusUnreachable")).toBeInTheDocument();
+    expect(screen.getAllByText("skills.updateAvailable")).toHaveLength(1);
+
+    // 「全部更新」只处理 status=update 的条目
+    await userEvent
+      .setup()
+      .click(screen.getByRole("button", { name: "skills.updateAll" }));
+    await waitFor(() => {
+      expect(updateSkillMock).toHaveBeenCalledTimes(1);
+      expect(updateSkillMock).toHaveBeenCalledWith("fine");
+    });
+  });
+
+  it("reports deleted and unreachable counts in the check-updates toast", async () => {
+    installedSkillsMock = [makeInstalledSkill({ id: "fine" })];
+    skillUpdatesMock = [
+      { id: "fine", name: "Fine", remoteHash: "new" },
+      {
+        id: "gone",
+        name: "Gone",
+        remoteHash: "",
+        status: "repo_deleted",
+      },
+      { id: "stuck", name: "Stuck", remoteHash: "", status: "unreachable" },
+    ];
+    const panelRef = createRef<UnifiedSkillsPanelHandle>();
+    render(
+      <UnifiedSkillsPanel
+        ref={panelRef}
+        onOpenDiscovery={() => {}}
+        currentApp="claude"
+      />,
+    );
+    checkUpdatesMock.mockResolvedValue({ data: skillUpdatesMock });
+
+    await act(async () => {
+      await panelRef.current?.checkUpdates();
+    });
+
+    expect(toastInfoMock).toHaveBeenCalledWith(
+      "skills.updatesFound",
+      expect.objectContaining({
+        description: expect.stringContaining("skills.updatesSummaryDeleted"),
+      }),
+    );
+    // 主文案计数 = 可更新数（1），且 description 同时包含已删除与无法检查
+    const [headline, opts] = toastInfoMock.mock.calls[0];
+    expect(headline).toBe("skills.updatesFound");
+    expect(opts.description).toContain("skills.updatesSummaryUnreachable");
+  });
+
+  it("uses the all-up-to-date headline when only deleted entries are found", async () => {
+    installedSkillsMock = [makeInstalledSkill({ id: "gone" })];
+    skillUpdatesMock = [
+      {
+        id: "gone",
+        name: "Gone",
+        remoteHash: "",
+        status: "skill_deleted",
+      },
+    ];
+    const panelRef = createRef<UnifiedSkillsPanelHandle>();
+    render(
+      <UnifiedSkillsPanel
+        ref={panelRef}
+        onOpenDiscovery={() => {}}
+        currentApp="claude"
+      />,
+    );
+    checkUpdatesMock.mockResolvedValue({ data: skillUpdatesMock });
+
+    await act(async () => {
+      await panelRef.current?.checkUpdates();
+    });
+
+    expect(toastInfoMock).toHaveBeenCalledWith(
+      "skills.noUpdates",
+      expect.objectContaining({
+        description: expect.stringContaining("skills.updatesSummaryDeleted"),
+      }),
+    );
   });
 
   it("waits for an explicit backup refresh before reporting deletion failure", async () => {

@@ -206,6 +206,24 @@ fn is_false(value: &bool) -> bool {
     !*value
 }
 
+/// 更新检测条目的状态。
+///
+/// 领域边界（见 CONTEXT.md）：`RepoDeleted` / `SkillDeleted` 是**确定性**信号
+/// （远端事实不存在），可安全建议用户处理；`Unreachable` 是**不确定性**信号
+/// （网络、限流、超时），只提示稍后再查，绝不与「已删除」混为一谈。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillUpdateStatus {
+    /// 哈希不一致，存在可用更新
+    Update,
+    /// 仓库级 404/410：整个仓库已删除或转移
+    RepoDeleted,
+    /// 仓库存在但该 Skill 目录已从远端移除
+    SkillDeleted,
+    /// 超时/网络/限流等不确定失败，无法下结论
+    Unreachable,
+}
+
 /// Skill 更新检测结果
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -216,8 +234,18 @@ pub struct SkillUpdateInfo {
     pub name: String,
     /// 当前本地哈希
     pub current_hash: Option<String>,
-    /// 远程最新哈希
+    /// 远程最新哈希（非 update 状态时为空串）
     pub remote_hash: String,
+    /// 本条目的状态（上游/旧客户端无此字段时视为普通更新）
+    #[serde(default = "SkillUpdateStatus::default_status")]
+    pub status: SkillUpdateStatus,
+}
+
+impl SkillUpdateStatus {
+    /// serde 默认值：旧数据/旧客户端没有 status 时视为普通更新。
+    fn default_status() -> Self {
+        SkillUpdateStatus::Update
+    }
 }
 
 /// Skill 存储位置迁移结果
@@ -1203,6 +1231,36 @@ impl SkillService {
         Ok(())
     }
 
+    /// 将仓库下载的最终错误归类为更新检测状态。
+    ///
+    /// download_repo 的错误有两种形态：format_skill_error 产生的 JSON
+    /// （含 context.status HTTP 状态码），以及网络层/超时的裸 anyhow 文本。
+    /// 仅 404/410 是确定性的「仓库已删除」；解析失败或任何其他状态都
+    /// 保守归类为「无法检查」——限流、断网、GitHub 抽风绝不谈「已删除」。
+    fn classify_repo_failure(error_message: &str) -> SkillUpdateStatus {
+        let parsed: Option<serde_json::Value> = serde_json::from_str(error_message).ok();
+        let status = parsed
+            .as_ref()
+            .and_then(|v| v.get("context"))
+            .and_then(|ctx| ctx.get("status"))
+            .and_then(|s| s.as_str());
+        match status {
+            Some("404") | Some("410") => SkillUpdateStatus::RepoDeleted,
+            _ => SkillUpdateStatus::Unreachable,
+        }
+    }
+
+    /// 构造一条非 update 状态的检测结果条目（远端哈希不适用，置空）。
+    fn non_update_entry(skill: &InstalledSkill, status: SkillUpdateStatus) -> SkillUpdateInfo {
+        SkillUpdateInfo {
+            id: skill.id.clone(),
+            name: skill.name.clone(),
+            current_hash: skill.content_hash.clone(),
+            remote_hash: String::new(),
+            status,
+        }
+    }
+
     /// 判定 check_updates 应使用的本地哈希。
     ///
     /// 次序关键：必须先确认 SSOT 目录存在，再信任数据库缓存的 content_hash。
@@ -1289,10 +1347,20 @@ impl SkillService {
                 Ok(Ok(result)) => result,
                 Ok(Err(e)) => {
                     log::warn!("检查更新时下载 {}/{} 失败: {e}", owner, name);
+                    let status = Self::classify_repo_failure(&e.to_string());
+                    for skill in group_skills {
+                        updates.push(Self::non_update_entry(skill, status.clone()));
+                    }
                     continue;
                 }
                 Err(_) => {
                     log::warn!("检查更新时下载 {}/{} 超时", owner, name);
+                    for skill in group_skills {
+                        updates.push(Self::non_update_entry(
+                            skill,
+                            SkillUpdateStatus::Unreachable,
+                        ));
+                    }
                     continue;
                 }
             };
@@ -1315,18 +1383,28 @@ impl SkillService {
                     remote_install_name.eq_ignore_ascii_case(&skill.directory)
                 });
 
-                let remote_skill_dir = match remote_match {
-                    Some(rs) => match Self::resolve_skill_source_dir(temp_dir, &rs.directory) {
-                        Some(path) => path,
-                        None => continue,
-                    },
-                    None => continue,
+                let remote_skill_dir = remote_match.and_then(|rs| {
+                    Self::resolve_skill_source_dir(temp_dir, &rs.directory)
+                });
+                let remote_skill_dir = match remote_skill_dir {
+                    Some(path) => path,
+                    None => {
+                        updates.push(Self::non_update_entry(
+                            skill,
+                            SkillUpdateStatus::SkillDeleted,
+                        ));
+                        continue;
+                    }
                 };
 
                 let remote_hash = match Self::compute_dir_hash(&remote_skill_dir) {
                     Ok(h) => h,
                     Err(e) => {
                         log::warn!("计算远程哈希失败 {}: {e}", skill.id);
+                        updates.push(Self::non_update_entry(
+                            skill,
+                            SkillUpdateStatus::Unreachable,
+                        ));
                         continue;
                     }
                 };
@@ -1351,6 +1429,7 @@ impl SkillService {
                         name: skill.name.clone(),
                         current_hash: local_hash,
                         remote_hash,
+                        status: SkillUpdateStatus::Update,
                     });
                 }
             }
@@ -4418,6 +4497,70 @@ pub fn migrate_skills_to_ssot(db: &Arc<Database>) -> Result<usize> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    // ===== 更新检测状态分类 =====
+
+    /// classify_repo_failure 把 download_repo 的最终错误映射为更新检测状态：
+    /// 404/410 是确定性的「仓库已删除」，其余一律保守归类为「无法检查」。
+    #[test]
+    fn classify_repo_failure_maps_gone_statuses_to_repo_deleted() {
+        let not_found =
+            format_skill_error("DOWNLOAD_FAILED", &[("status", "404")], Some("http404"));
+        let gone = format_skill_error("DOWNLOAD_FAILED", &[("status", "410")], None);
+        assert!(matches!(
+            SkillService::classify_repo_failure(&not_found),
+            SkillUpdateStatus::RepoDeleted
+        ));
+        assert!(matches!(
+            SkillService::classify_repo_failure(&gone),
+            SkillUpdateStatus::RepoDeleted
+        ));
+    }
+
+    #[test]
+    fn classify_repo_failure_maps_everything_else_to_unreachable() {
+        for status in ["403", "429", "500", "502"] {
+            let msg = format_skill_error("DOWNLOAD_FAILED", &[("status", status)], None);
+            assert!(
+                matches!(
+                    SkillService::classify_repo_failure(&msg),
+                    SkillUpdateStatus::Unreachable
+                ),
+                "status {status} 应归类为无法检查"
+            );
+        }
+        // 网络层错误不是 format_skill_error JSON（任意 anyhow 上下文）→ 保守归类
+        assert!(matches!(
+            SkillService::classify_repo_failure("connection reset by peer"),
+            SkillUpdateStatus::Unreachable
+        ));
+        // JSON 但没有 status 字段 → 保守归类
+        let no_status = format_skill_error("ARCHIVE_TOO_LARGE", &[("limit_mb", "512")], None);
+        assert!(matches!(
+            SkillService::classify_repo_failure(&no_status),
+            SkillUpdateStatus::Unreachable
+        ));
+    }
+
+    #[test]
+    fn skill_update_info_serializes_status_snake_case() {
+        for (status, wire) in [
+            (SkillUpdateStatus::Update, "update"),
+            (SkillUpdateStatus::RepoDeleted, "repo_deleted"),
+            (SkillUpdateStatus::SkillDeleted, "skill_deleted"),
+            (SkillUpdateStatus::Unreachable, "unreachable"),
+        ] {
+            let info = SkillUpdateInfo {
+                id: "s1".into(),
+                name: "S".into(),
+                current_hash: None,
+                remote_hash: String::new(),
+                status: status.clone(),
+            };
+            let json = serde_json::to_string(&info).unwrap();
+            assert!(json.contains(&format!("\"status\":\"{wire}\"")), "{json}");
+        }
+    }
 
     #[test]
     fn skill_state_lock_allows_snapshots_but_excludes_writers() {

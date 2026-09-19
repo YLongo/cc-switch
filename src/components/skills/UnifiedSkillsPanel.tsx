@@ -29,6 +29,7 @@ import {
   type InstalledSkill,
   type SkillUpdateInfo,
 } from "@/hooks/useSkills";
+import type { SkillUpdateStatus } from "@/lib/api/skills";
 import type { AppId } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -198,18 +199,26 @@ const UnifiedSkillsPanel = React.forwardRef<
     setWritePending(false);
   };
 
+  // 「全部更新」只处理确定可更新的条目：远端已删除/无法检查的条目
+  // 点更新只会失败，必须排除在批量路径之外。
   const applicableSkillUpdates = useMemo(() => {
     const installedIds = new Set((skills ?? []).map((skill) => skill.id));
-    return (skillUpdates ?? []).filter((update) => installedIds.has(update.id));
+    return (skillUpdates ?? []).filter(
+      (update) =>
+        installedIds.has(update.id) && (update.status ?? "update") === "update",
+    );
   }, [skillUpdates, skills]);
 
   const updatesMap = useMemo(() => {
     const map: Record<string, SkillUpdateInfo> = {};
-    for (const update of applicableSkillUpdates) {
-      map[update.id] = update;
+    const installedIds = new Set((skills ?? []).map((skill) => skill.id));
+    for (const update of skillUpdates ?? []) {
+      if (installedIds.has(update.id)) {
+        map[update.id] = update;
+      }
     }
     return map;
-  }, [applicableSkillUpdates]);
+  }, [skillUpdates, skills]);
 
   const enabledCounts = useMemo(() => {
     const counts = {
@@ -444,7 +453,37 @@ const UnifiedSkillsPanel = React.forwardRef<
       if (updates.length === 0) {
         toast.success(t("skills.noUpdates"), { closeButton: true });
       } else {
-        toast.info(t("skills.updatesFound", { count: updates.length }), {
+        // 分类汇总：更新数进主文案；已删除/无法检查进 description，
+        // 多仓库来源时用户能一眼看出哪些 skill 出了什么状况。
+        const deletedCount = updates.filter(
+          (u) => u.status === "repo_deleted" || u.status === "skill_deleted",
+        ).length;
+        const unreachableCount = updates.filter(
+          (u) => u.status === "unreachable",
+        ).length;
+        const updateCount = updates.filter(
+          (u) => (u.status ?? "update") === "update",
+        ).length;
+        const summaryParts: string[] = [];
+        if (deletedCount > 0) {
+          summaryParts.push(
+            t("skills.updatesSummaryDeleted", { count: deletedCount }),
+          );
+        }
+        if (unreachableCount > 0) {
+          summaryParts.push(
+            t("skills.updatesSummaryUnreachable", { count: unreachableCount }),
+          );
+        }
+        // 全部条目都不是可更新时，「发现 0 个可用更新」读起来突兀，
+        // 改用「均为最新」作主文案，状况留在 description。
+        const headline =
+          updateCount > 0
+            ? t("skills.updatesFound", { count: updateCount })
+            : t("skills.noUpdates");
+        toast.info(headline, {
+          description:
+            summaryParts.length > 0 ? summaryParts.join(" · ") : undefined,
           closeButton: true,
         });
       }
@@ -701,7 +740,11 @@ const UnifiedSkillsPanel = React.forwardRef<
                   <InstalledSkillListItem
                     key={skill.id}
                     skill={skill}
-                    hasUpdate={!!updatesMap[skill.id]}
+                    updateStatus={
+                      updatesMap[skill.id]
+                        ? (updatesMap[skill.id].status ?? "update")
+                        : undefined
+                    }
                     isUpdating={
                       updateSkillMutation.isPending &&
                       updateSkillMutation.variables === skill.id
@@ -762,7 +805,8 @@ UnifiedSkillsPanel.displayName = "UnifiedSkillsPanel";
 interface InstalledSkillListItemProps {
   skill: InstalledSkill;
   appIds: AppId[];
-  hasUpdate?: boolean;
+  /** 更新检测状态：undefined = 无条目；"update" = 可更新；其余见徽章 */
+  updateStatus?: SkillUpdateStatus;
   isUpdating?: boolean;
   actionsDisabled?: boolean;
   onToggleApp: (id: string, app: AppId, enabled: boolean) => void;
@@ -774,7 +818,7 @@ interface InstalledSkillListItemProps {
 const InstalledSkillListItem: React.FC<InstalledSkillListItemProps> = ({
   skill,
   appIds,
-  hasUpdate,
+  updateStatus,
   isUpdating,
   actionsDisabled,
   onToggleApp,
@@ -783,6 +827,54 @@ const InstalledSkillListItem: React.FC<InstalledSkillListItemProps> = ({
   isLast,
 }) => {
   const { t } = useTranslation();
+
+  // 领域边界（见 CONTEXT.md）：deleted 是确定性信号（红，提示处理），
+  // unreachable 是不确定性信号（灰，稍后再查）；两者都不提供更新按钮。
+  const statusBadge = (() => {
+    switch (updateStatus) {
+      case "update":
+        return (
+          <Badge
+            variant="outline"
+            className="shrink-0 text-[10px] px-1.5 py-0 h-4 border-amber-500 text-amber-600 dark:text-amber-400"
+          >
+            {t("skills.updateAvailable")}
+          </Badge>
+        );
+      case "repo_deleted":
+      case "skill_deleted": {
+        const isRepo = updateStatus === "repo_deleted";
+        const labelKey = isRepo
+          ? "skills.statusRepoDeleted"
+          : "skills.statusSkillDeleted";
+        const hintKey = isRepo
+          ? "skills.statusRepoDeletedHint"
+          : "skills.statusSkillDeletedHint";
+        return (
+          <Badge
+            variant="outline"
+            className="shrink-0 text-[10px] px-1.5 py-0 h-4 border-red-500/60 text-red-600 dark:text-red-400"
+            title={t(hintKey)}
+          >
+            {t(labelKey)}
+          </Badge>
+        );
+      }
+      case "unreachable":
+        return (
+          <Badge
+            variant="outline"
+            className="shrink-0 text-[10px] px-1.5 py-0 h-4 text-muted-foreground"
+            title={t("skills.statusUnreachableHint")}
+          >
+            {t("skills.statusUnreachable")}
+          </Badge>
+        );
+      case undefined:
+        return null;
+    }
+  })();
+  const hasUpdate = updateStatus === "update";
 
   const openDocs = async () => {
     if (!skill.readmeUrl) return;
@@ -819,14 +911,7 @@ const InstalledSkillListItem: React.FC<InstalledSkillListItemProps> = ({
           <span className="text-xs text-muted-foreground/50 flex-shrink-0">
             {sourceLabel}
           </span>
-          {hasUpdate && (
-            <Badge
-              variant="outline"
-              className="shrink-0 text-[10px] px-1.5 py-0 h-4 border-amber-500 text-amber-600 dark:text-amber-400"
-            >
-              {t("skills.updateAvailable")}
-            </Badge>
-          )}
+          {statusBadge}
         </div>
         {skill.description && (
           <p

@@ -97,12 +97,21 @@ export interface Skill {
   repoBranch?: string;
 }
 
+/** 更新检测状态：确定性删除与不确定性网络失败严格区分 */
+export type SkillUpdateStatus =
+  | "update"
+  | "repo_deleted"
+  | "skill_deleted"
+  | "unreachable";
+
 /** Skill 更新信息 */
 export interface SkillUpdateInfo {
   id: string;
   name: string;
   currentHash?: string;
   remoteHash: string;
+  /** 旧数据/旧后端无此字段时视为 "update" */
+  status?: SkillUpdateStatus;
 }
 
 /** 存储位置迁移结果 */
