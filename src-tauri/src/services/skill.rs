@@ -1397,6 +1397,21 @@ impl SkillService {
                     }
                 };
 
+                // 存量 readme_url 纠偏（#6111 前的坏链接）：远端真实目录是权威，
+                // 哈希一致无更新条目的 skill 也要修正，否则箭头跳转永远 404。
+                if let Some(remote_dir) = remote_match.map(|rs| rs.directory.as_str()) {
+                    if let Some(fixed) = Self::corrected_readme_url(
+                        skill.readme_url.as_deref(),
+                        remote_dir,
+                        owner,
+                        name,
+                        branch,
+                    ) {
+                        log::info!("修正 skill {} 的文档链接: {fixed}", skill.id);
+                        let _ = db.update_skill_readme_url(&skill.id, &fixed);
+                    }
+                }
+
                 let remote_hash = match Self::compute_dir_hash(&remote_skill_dir) {
                     Ok(h) => h,
                     Err(e) => {
@@ -1586,12 +1601,13 @@ impl SkillService {
         let skill_md = metadata_source.join("SKILL.md");
         let (new_name, new_description) = Self::read_skill_name_desc(&skill_md, &skill.directory);
 
-        // 更新 readme_url
-        let doc_path = skill
-            .readme_url
-            .as_deref()
-            .and_then(Self::extract_doc_path_from_url)
-            .unwrap_or_else(|| format!("{}/SKILL.md", skill.directory.trim_end_matches('/')));
+        // 更新 readme_url：远端真实目录是权威事实（#6111：directory 只是末级
+        // 目录名，嵌套仓库直接拼会丢路径），不再从旧 readme_url 提取——
+        // 存量坏链接会提取出坏路径，在每次更新后继续传播 404。
+        let doc_path = format!(
+            "{}/SKILL.md",
+            remote_match.directory.trim_end_matches('/')
+        );
         let readme_url = Self::build_skill_doc_url(&owner, &name, &used_branch, &doc_path);
 
         let updated_metadata = InstalledSkill {
@@ -3301,6 +3317,28 @@ impl SkillService {
         Some(parts.join("/"))
     }
 
+    /// 检查存量 readme_url 是否与远端真实目录一致，不一致时生成纠正后的 URL。
+    ///
+    /// #6111 修复前安装的存量记录，其 readme_url 用 directory（末级目录名）
+    /// 直拼而成，嵌套仓库（如 skills/<name>）场景链接 404。检查更新时远端
+    /// 真实目录（remote_directory）是权威事实，用它纠偏。
+    /// 返回 None 表示无需修正（一致 / 无存量 URL / 无法解析），调用方不写库。
+    fn corrected_readme_url(
+        readme_url: Option<&str>,
+        remote_directory: &str,
+        owner: &str,
+        repo: &str,
+        branch: &str,
+    ) -> Option<String> {
+        let existing = readme_url?;
+        let existing_path = Self::extract_doc_path_from_url(existing)?;
+        let expected = format!("{}/SKILL.md", remote_directory.trim_end_matches('/'));
+        if existing_path == expected {
+            return None;
+        }
+        Self::build_skill_doc_url(owner, repo, branch, &expected)
+    }
+
     /// 选择 readme_url 使用的仓库内文档路径：真实解析出的源目录优先，其次是
     /// 旧 readme_url 中保存的路径，最后才按 directory 拼接。skills.sh 的
     /// `directory` 只是 skillId（末级目录名），嵌套目录场景直接拼接会丢路径、
@@ -4502,6 +4540,32 @@ mod tests {
 
     /// classify_repo_failure 把 download_repo 的最终错误映射为更新检测状态：
     /// 404/410 是确定性的「仓库已删除」，其余一律保守归类为「无法检查」。
+
+    // ===== readme_url 存量纠偏 =====
+
+    /// 远端目录已知时，存量 readme_url 指向错误路径（#6111 之前的 directory
+    /// 直拼版）应被纠正为真实仓库相对路径，箭头跳转不再 404。
+    #[test]
+    fn corrected_readme_url_fixes_stale_nested_path() {
+        let stale = "https://github.com/multica-ai/andrej-karpathy-skills/blob/main/karpathy-guidelines/SKILL.md";
+        assert_eq!(
+            SkillService::corrected_readme_url(Some(stale), "skills/karpathy-guidelines", "multica-ai", "andrej-karpathy-skills", "main"),
+            Some("https://github.com/multica-ai/andrej-karpathy-skills/blob/main/skills/karpathy-guidelines/SKILL.md".to_string())
+        );
+    }
+
+    /// URL 已与远端目录一致、URL 缺失但无需生成等情形返回 None，调用方不写库。
+    #[test]
+    fn corrected_readme_url_returns_none_when_already_correct_or_absent() {
+        let correct = "https://github.com/o/r/blob/main/skills/x/SKILL.md";
+        assert_eq!(SkillService::corrected_readme_url(Some(correct), "skills/x", "o", "r", "main"), None);
+        // 无存量 URL：安装路径负责写入，检查更新不做无中生有的回填
+        assert_eq!(SkillService::corrected_readme_url(None, "skills/x", "o", "r", "main"), None);
+        // 存量 URL 无法解析出文档路径：保持原状，交给后续真实更新处理
+        let opaque = "https://example.com/docs";
+        assert_eq!(SkillService::corrected_readme_url(Some(opaque), "skills/x", "o", "r", "main"), None);
+    }
+
     #[test]
     fn classify_repo_failure_maps_gone_statuses_to_repo_deleted() {
         let not_found =

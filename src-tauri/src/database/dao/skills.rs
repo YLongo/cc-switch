@@ -213,6 +213,19 @@ impl Database {
     }
 
     /// 更新 Skill 的内容哈希和更新时间
+    /// 只重写 readme_url（存量坏链接纠偏），不动其他字段。
+    /// 返回 false 表示目标行不存在（已被卸载）。
+    pub fn update_skill_readme_url(&self, id: &str, readme_url: &str) -> Result<bool, AppError> {
+        let conn = lock_conn!(self.conn);
+        let affected = conn
+            .execute(
+                "UPDATE skills SET readme_url = ?1 WHERE id = ?2",
+                params![readme_url, id],
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        Ok(affected > 0)
+    }
+
     pub fn update_skill_hash(
         &self,
         id: &str,
@@ -328,6 +341,33 @@ mod tests {
             content_hash: Some(format!("{name}-hash")),
             updated_at: 2,
         }
+    }
+
+
+    #[test]
+    fn update_skill_readme_url_rewrites_only_url_and_missing_returns_false() {
+        let db = Database::memory().expect("memory db");
+        let original = skill("owner/repo:skill", "original", SkillApps::only(&AppType::Claude));
+        db.save_skill(&original).expect("seed skill");
+
+        let fixed = "https://github.com/owner/repo/blob/main/skills/skill/SKILL.md";
+        assert!(db
+            .update_skill_readme_url(&original.id, fixed)
+            .expect("update readme url"));
+
+        let stored = db
+            .get_installed_skill(&original.id)
+            .expect("query skill")
+            .expect("skill remains installed");
+        assert_eq!(stored.readme_url.as_deref(), Some(fixed));
+        // 只动 URL，其余字段不受影响
+        assert_eq!(stored.name, original.name);
+        assert_eq!(stored.content_hash, original.content_hash);
+        assert_eq!(stored.updated_at, original.updated_at);
+
+        assert!(!db
+            .update_skill_readme_url("owner/repo:ghost", fixed)
+            .expect("update missing skill"));
     }
 
     #[test]
