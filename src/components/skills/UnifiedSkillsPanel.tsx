@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import {
   type ImportSkillSelection,
@@ -110,6 +111,7 @@ const UnifiedSkillsPanel = React.forwardRef<
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
   const [deployDialogSkill, setDeployDialogSkill] =
     useState<InstalledSkill | null>(null);
+  const [batchDeployOpen, setBatchDeployOpen] = useState(false);
   const deployProjectMutation = useDeploySkillToProject();
   const undeployProjectMutation = useUndeploySkillFromProject();
   const [searchQuery, setSearchQuery] = useState("");
@@ -389,6 +391,63 @@ const UnifiedSkillsPanel = React.forwardRef<
     } catch (e) {
       toast.error(extractErrorMessage(e));
     }
+  };
+
+  // 批量部署（C2 汇总反馈）：allSettled 逐个跑，失败不阻塞成功方；
+  // 转专属（B2）：仅对部署成功的 skill 关闭其全部已启用的全局开关，
+  // 失败方的全局状态保持原样。
+  const handleBatchDeploy = async (
+    projectRoot: string,
+    selectedSkills: InstalledSkill[],
+    disableGlobal: boolean,
+  ) => {
+    const results = await Promise.allSettled(
+      selectedSkills.map((s) =>
+        deployProjectMutation.mutateAsync({
+          skillId: s.id,
+          projectRoot,
+        }),
+      ),
+    );
+
+    const succeeded: InstalledSkill[] = [];
+    const failedNames: string[] = [];
+    results.forEach((r, i) => {
+      if (r.status === "fulfilled") succeeded.push(selectedSkills[i]);
+      else failedNames.push(selectedSkills[i].name);
+    });
+
+    if (disableGlobal && succeeded.length > 0) {
+      await Promise.allSettled(
+        succeeded.flatMap((s) =>
+          (Object.entries(s.apps) as Array<[AppId, boolean]>)
+            .filter(([, enabled]) => enabled)
+            .map(([app]) =>
+              toggleAppMutation.mutateAsync({
+                id: s.id,
+                app,
+                enabled: false,
+              }),
+            ),
+        ),
+      );
+    }
+
+    if (succeeded.length > 0) {
+      toast.success(
+        t("skills.batchDeployToast", {
+          count: succeeded.length,
+          path: projectRoot,
+        }),
+      );
+    }
+    if (failedNames.length > 0) {
+      toast.warning(
+        t("skills.batchDeployToastFailed", { names: failedNames.join("、") }),
+        { closeButton: true },
+      );
+    }
+    setBatchDeployOpen(false);
   };
 
   const knownProjectRoots = useMemo(() => {
@@ -753,6 +812,20 @@ const UnifiedSkillsPanel = React.forwardRef<
             disabled={interactionBlocked}
           />
         </div>
+        {hasSkills && (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="mb-4 h-7 shrink-0 text-xs gap-1"
+            onClick={() => setBatchDeployOpen(true)}
+            disabled={interactionBlocked}
+            title={t("skills.batchDeployToProject")}
+          >
+            <FolderUp size={12} />
+            {t("skills.batchDeployToProject")}
+          </Button>
+        )}
         <div
           className="mb-4 overflow-hidden transition-all duration-300 ease-out"
           style={{
@@ -855,6 +928,16 @@ const UnifiedSkillsPanel = React.forwardRef<
           pending={writePending}
           onConfirm={confirmDialog.onConfirm}
           onCancel={() => setConfirmDialog(null)}
+        />
+      )}
+
+      {batchDeployOpen && (
+        <BatchDeployDialog
+          skills={skills ?? []}
+          knownProjects={knownProjectRoots}
+          isDeploying={deployProjectMutation.isPending}
+          onDeploy={handleBatchDeploy}
+          onClose={() => setBatchDeployOpen(false)}
         />
       )}
 
@@ -1094,6 +1177,192 @@ const InstalledSkillListItem: React.FC<InstalledSkillListItemProps> = ({
         </Button>
       </div>
     </ListItemRow>
+  );
+};
+
+// ===== 批量部署弹窗（以项目为中心）=====
+// 一次给一个项目配一套 skill 组合：选项目 → 勾选多个 skill → 部署。
+// 可选「转专属」：部署成功后关闭所选 skill 的全部全局开关（B2 共识）。
+
+interface BatchDeployDialogProps {
+  skills: InstalledSkill[];
+  knownProjects: string[];
+  isDeploying: boolean;
+  onDeploy: (
+    projectRoot: string,
+    selectedSkills: InstalledSkill[],
+    disableGlobal: boolean,
+  ) => void;
+  onClose: () => void;
+}
+
+const BatchDeployDialog: React.FC<BatchDeployDialogProps> = ({
+  skills,
+  knownProjects,
+  isDeploying,
+  onDeploy,
+  onClose,
+}) => {
+  const { t } = useTranslation();
+  const [selectedRoot, setSelectedRoot] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [disableGlobal, setDisableGlobal] = useState(true);
+
+  const deployedInProject = useMemo(() => {
+    const roots = new Set<string>();
+    if (!selectedRoot) return roots;
+    for (const s of skills) {
+      if ((s.deployments ?? []).some((d) => d.projectRoot === selectedRoot)) {
+        roots.add(s.id);
+      }
+    }
+    return roots;
+  }, [skills, selectedRoot]);
+
+  const toggleSelect = (id: string, checked: boolean) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  };
+
+  const pickDirectory = async () => {
+    try {
+      const picked = await settingsApi.pickDirectory();
+      if (picked) setSelectedRoot(picked);
+    } catch {
+      // 用户取消，忽略
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>{t("skills.batchDeployDialogTitle")}</DialogTitle>
+          <DialogDescription>
+            {t("skills.deployDialogDescription")}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-3">
+          {/* 项目选择 */}
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={pickDirectory}
+            >
+              <FolderGit2 size={14} className="mr-1" />
+              {t("skills.deployPickDirectory")}
+            </Button>
+            {selectedRoot && (
+              <span className="text-xs text-muted-foreground truncate flex-1">
+                {selectedRoot}
+              </span>
+            )}
+          </div>
+
+          {knownProjects.filter((r) => r !== selectedRoot).length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {knownProjects
+                .filter((r) => r !== selectedRoot)
+                .map((root) => (
+                  <button
+                    key={root}
+                    type="button"
+                    onClick={() => setSelectedRoot(root)}
+                    className={cn(
+                      "rounded-md border px-2 py-0.5 text-[11px] transition-colors truncate max-w-[180px]",
+                      selectedRoot === root
+                        ? "border-blue-500 bg-blue-500/10 text-blue-600 dark:text-blue-400"
+                        : "border-border-default text-muted-foreground hover:text-foreground",
+                    )}
+                    title={root}
+                  >
+                    {root}
+                  </button>
+                ))}
+            </div>
+          )}
+
+          {/* skill 多选列表 */}
+          <div className="max-h-64 overflow-y-auto rounded-md border border-border-default divide-y divide-border-default">
+            {skills.map((skill) => {
+              const alreadyDeployed = deployedInProject.has(skill.id);
+              return (
+                <label
+                  key={skill.id}
+                  className={cn(
+                    "flex items-center gap-2 px-3 py-1.5 text-sm",
+                    alreadyDeployed ? "opacity-50" : "cursor-pointer",
+                  )}
+                >
+                  <Checkbox
+                    checked={selectedIds.has(skill.id)}
+                    disabled={alreadyDeployed || isDeploying}
+                    onCheckedChange={(checked) =>
+                      toggleSelect(skill.id, checked === true)
+                    }
+                  />
+                  <span className="truncate flex-1">{skill.name}</span>
+                  {alreadyDeployed && (
+                    <span className="text-[10px] text-muted-foreground shrink-0">
+                      {t("skills.batchDeployAlreadyDeployed")}
+                    </span>
+                  )}
+                </label>
+              );
+            })}
+          </div>
+
+          {/* 转专属选项（默认开） */}
+          <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
+            <Checkbox
+              checked={disableGlobal}
+              disabled={isDeploying}
+              onCheckedChange={(checked) => setDisableGlobal(checked === true)}
+            />
+            {t("skills.batchDeployDisableGlobal")}
+          </label>
+
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              className="flex-1"
+              onClick={onClose}
+              disabled={isDeploying}
+            >
+              {t("common.cancel")}
+            </Button>
+            <Button
+              type="button"
+              className="flex-1"
+              disabled={!selectedRoot || selectedIds.size === 0 || isDeploying}
+              onClick={() =>
+                selectedRoot &&
+                onDeploy(
+                  selectedRoot,
+                  skills.filter((s) => selectedIds.has(s.id)),
+                  disableGlobal,
+                )
+              }
+            >
+              {isDeploying ? (
+                <Loader2 size={14} className="mr-1 animate-spin" />
+              ) : (
+                <FolderUp size={14} className="mr-1" />
+              )}
+              {t("skills.deployConfirm")}
+            </Button>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 };
 

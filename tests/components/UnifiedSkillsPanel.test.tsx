@@ -1015,6 +1015,155 @@ describe("UnifiedSkillsPanel", () => {
     expect(screen.getAllByText("/mock/selected-dir").length).toBe(2);
   });
 
+  it("batch deploys multiple skills to a project and disables global switches", async () => {
+    installedSkillsMock = [
+      makeInstalledSkill({
+        id: "owner/repo:alpha-skill",
+        name: "Alpha Skill",
+        directory: "alpha-skill",
+        apps: { claude: true, pi: false },
+      }),
+      makeInstalledSkill({
+        id: "owner/repo:beta-skill",
+        name: "Beta Skill",
+        directory: "beta-skill",
+        apps: { pi: true, claude: false },
+      }),
+    ];
+    deployProjectMock.mockImplementation(
+      ({ projectRoot }: { projectRoot: string }) =>
+        Promise.resolve({
+          outcome: "created",
+          deployment: { projectRoot, deployedAt: 1 },
+        }),
+    );
+    toggleSkillAppMock.mockResolvedValue(true);
+    const user = userEvent.setup();
+
+    renderPanel();
+
+    // 面板顶部批量入口
+    await user.click(screen.getByTitle("skills.batchDeployToProject"));
+
+    // 勾选两个 skill
+    await user.click(screen.getByLabelText("Alpha Skill"));
+    await user.click(screen.getByLabelText("Beta Skill"));
+    await user.click(
+      screen.getByRole("button", { name: "skills.deployPickDirectory" }),
+    );
+
+    // 转专属开关默认勾选
+    const exclusive = screen.getByLabelText(
+      "skills.batchDeployDisableGlobal",
+    ) as HTMLInputElement;
+    expect(exclusive.checked).toBe(true);
+
+    await user.click(
+      screen.getByRole("button", { name: /skills.deployConfirm/ }),
+    );
+
+    await waitFor(() => expect(deployProjectMock).toHaveBeenCalledTimes(2));
+    expect(deployProjectMock).toHaveBeenCalledWith({
+      skillId: "owner/repo:alpha-skill",
+      projectRoot: "/mock/selected-dir",
+    });
+    expect(deployProjectMock).toHaveBeenCalledWith({
+      skillId: "owner/repo:beta-skill",
+      projectRoot: "/mock/selected-dir",
+    });
+
+    // 全局启用的开关被关闭：alpha(claude)、beta(pi)
+    await waitFor(() => expect(toggleSkillAppMock).toHaveBeenCalledTimes(2));
+    expect(toggleSkillAppMock).toHaveBeenCalledWith({
+      id: "owner/repo:alpha-skill",
+      app: "claude",
+      enabled: false,
+    });
+    expect(toggleSkillAppMock).toHaveBeenCalledWith({
+      id: "owner/repo:beta-skill",
+      app: "pi",
+      enabled: false,
+    });
+
+    // 汇总成功 toast（C2：不逐条刷屏）
+    expect(toastSuccessMock).toHaveBeenCalledWith("skills.batchDeployToast");
+  });
+
+  it("batch deploy reports conflicts without blocking successes", async () => {
+    installedSkillsMock = [
+      makeInstalledSkill({
+        id: "owner/repo:alpha-skill",
+        name: "Alpha Skill",
+        apps: { claude: true },
+      }),
+      makeInstalledSkill({
+        id: "owner/repo:beta-skill",
+        name: "Beta Skill",
+        apps: { claude: true },
+      }),
+    ];
+    deployProjectMock.mockImplementation(({ skillId }: { skillId: string }) =>
+      skillId === "owner/repo:beta-skill"
+        ? Promise.reject(new Error("DEPLOY_TARGET_CONFLICT: occupied"))
+        : Promise.resolve({
+            outcome: "created",
+            deployment: { projectRoot: "/mock/selected-dir", deployedAt: 1 },
+          }),
+    );
+    toggleSkillAppMock.mockResolvedValue(true);
+    const user = userEvent.setup();
+
+    renderPanel();
+    await user.click(screen.getByTitle("skills.batchDeployToProject"));
+    await user.click(screen.getByLabelText("Alpha Skill"));
+    await user.click(screen.getByLabelText("Beta Skill"));
+    await user.click(
+      screen.getByRole("button", { name: "skills.deployPickDirectory" }),
+    );
+    // 不转专属，聚焦冲突反馈
+    await user.click(screen.getByLabelText("skills.batchDeployDisableGlobal"));
+    await user.click(
+      screen.getByRole("button", { name: /skills.deployConfirm/ }),
+    );
+
+    await waitFor(() => expect(toastWarningMock).toHaveBeenCalled());
+    // 部分成功也有汇总
+    expect(toastSuccessMock).toHaveBeenCalledWith("skills.batchDeployToast");
+    // 失败方未关全局
+    expect(toggleSkillAppMock).not.toHaveBeenCalledWith({
+      id: "owner/repo:beta-skill",
+      app: "claude",
+      enabled: false,
+    });
+  });
+
+  it("disables skills already deployed to the selected project in batch dialog", async () => {
+    installedSkillsMock = [
+      makeInstalledSkill({
+        id: "owner/repo:alpha-skill",
+        name: "Alpha Skill",
+        deployments: [{ projectRoot: "/mock/selected-dir", deployedAt: 1 }],
+      }),
+      makeInstalledSkill({
+        id: "owner/repo:beta-skill",
+        name: "Beta Skill",
+      }),
+    ];
+    const user = userEvent.setup();
+
+    renderPanel();
+    await user.click(screen.getByTitle("skills.batchDeployToProject"));
+    await user.click(
+      screen.getByRole("button", { name: "skills.deployPickDirectory" }),
+    );
+
+    // 已部署行的 label 文本附加了「已部署」标记，用 role+regex 定位
+    expect(
+      screen.getByRole("checkbox", { name: /Alpha Skill/ }),
+    ).toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: /Beta Skill/ })).toBeEnabled();
+  });
+
   it("closes the deploy dialog via cancel button", async () => {
     installedSkillsMock = [makeInstalledSkill()];
     const user = userEvent.setup();
