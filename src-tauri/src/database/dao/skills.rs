@@ -257,7 +257,10 @@ impl Database {
     }
 
     /// 查询某 skill 的全部项目部署。
-    pub fn get_skill_deployments(&self, skill_id: &str) -> Result<Vec<ProjectDeployment>, AppError> {
+    pub fn get_skill_deployments(
+        &self,
+        skill_id: &str,
+    ) -> Result<Vec<ProjectDeployment>, AppError> {
         let conn = lock_conn!(self.conn);
         let mut stmt = conn
             .prepare(
@@ -409,14 +412,16 @@ mod tests {
         }
     }
 
-
-
     // ===== 项目部署记录 =====
 
     #[test]
     fn project_deployment_roundtrip_and_idempotent_add() {
         let db = Database::memory().expect("memory db");
-        let original = skill("owner/repo:skill", "original", SkillApps::only(&AppType::Pi));
+        let original = skill(
+            "owner/repo:skill",
+            "original",
+            SkillApps::only(&AppType::Pi),
+        );
         db.save_skill(&original).expect("seed skill");
 
         db.add_project_deployment(&original.id, "/tmp/proj-a", 100)
@@ -440,14 +445,21 @@ mod tests {
     #[test]
     fn remove_project_deployment_and_cascade_on_skill_delete() {
         let db = Database::memory().expect("memory db");
-        let original = skill("owner/repo:skill", "original", SkillApps::only(&AppType::Pi));
+        let original = skill(
+            "owner/repo:skill",
+            "original",
+            SkillApps::only(&AppType::Pi),
+        );
         db.save_skill(&original).expect("seed skill");
         db.add_project_deployment(&original.id, "/tmp/proj-a", 100)
             .expect("add deployment");
 
         db.remove_project_deployment(&original.id, "/tmp/proj-a")
             .expect("remove deployment");
-        assert!(db.get_skill_deployments(&original.id).expect("query").is_empty());
+        assert!(db
+            .get_skill_deployments(&original.id)
+            .expect("query")
+            .is_empty());
         // 移除不存在的记录也成功（幂等）
         db.remove_project_deployment(&original.id, "/tmp/proj-a")
             .expect("remove missing deployment is idempotent");
@@ -456,13 +468,20 @@ mod tests {
             .expect("re-add for cascade test");
         db.delete_skill(&original.id).expect("delete skill");
         // skill 行删除后部署记录随之清理（悬空记录会让卸载遍历永远删不掉）
-        assert!(db.get_skill_deployments(&original.id).expect("query").is_empty());
+        assert!(db
+            .get_skill_deployments(&original.id)
+            .expect("query")
+            .is_empty());
     }
 
     #[test]
     fn update_skill_readme_url_rewrites_only_url_and_missing_returns_false() {
         let db = Database::memory().expect("memory db");
-        let original = skill("owner/repo:skill", "original", SkillApps::only(&AppType::Claude));
+        let original = skill(
+            "owner/repo:skill",
+            "original",
+            SkillApps::only(&AppType::Claude),
+        );
         db.save_skill(&original).expect("seed skill");
 
         let fixed = "https://github.com/owner/repo/blob/main/skills/skill/SKILL.md";

@@ -561,7 +561,12 @@ impl SkillService {
         ))
     }
 
-    /// 从旧 readme_url 中提取仓库内文档路径，兼容 `blob`/`tree` 两种格式
+    /// 从旧 readme_url 中提取仓库内文档路径，兼容 `blob`/`tree` 两种格式。
+    ///
+    /// skills 表可被同步导入的远端快照整表覆盖，存量 URL 不可信：
+    /// 含 `..` 段、反斜杠或控制字符的路径会让 build_skill_doc_url 把
+    /// openExternal 指到 github.com 上攻击者选择的路径，一律拒绝
+    /// （返回 None，调用方回退到默认 `skills/<name>/SKILL.md`）。
     fn extract_doc_path_from_url(url: &str) -> Option<String> {
         let marker = if url.contains("/blob/") {
             "/blob/"
@@ -576,7 +581,22 @@ impl SkillService {
         if path.is_empty() {
             return None;
         }
+        if !Self::is_safe_doc_path(path) {
+            log::warn!("拒绝从存量 readme_url 提取可疑路径: {path}");
+            return None;
+        }
         Some(path.to_string())
+    }
+
+    /// doc_path 的统一安全守卫：拒绝 `..`/`.` 段、反斜杠、控制字符，
+    /// 以及任何百分号编码成分——`%2e%2e` 会被 WHATWG 打开器归一化为
+    /// 点段绕过字面检查（自家生成的 URL 不产生 `%`，拒绝只会回退默认
+    /// 路径，无误伤）。
+    fn is_safe_doc_path(path: &str) -> bool {
+        !(path.split('/').any(|seg| seg == ".." || seg == ".")
+            || path.contains('\\')
+            || path.contains('%')
+            || path.chars().any(|c| c.is_control()))
     }
 
     // ========== 路径管理 ==========
@@ -1400,9 +1420,8 @@ impl SkillService {
                     remote_install_name.eq_ignore_ascii_case(&skill.directory)
                 });
 
-                let remote_skill_dir = remote_match.and_then(|rs| {
-                    Self::resolve_skill_source_dir(temp_dir, &rs.directory)
-                });
+                let remote_skill_dir = remote_match
+                    .and_then(|rs| Self::resolve_skill_source_dir(temp_dir, &rs.directory));
                 let remote_skill_dir = match remote_skill_dir {
                     Some(path) => path,
                     None => {
@@ -1621,10 +1640,7 @@ impl SkillService {
         // 更新 readme_url：远端真实目录是权威事实（#6111：directory 只是末级
         // 目录名，嵌套仓库直接拼会丢路径），不再从旧 readme_url 提取——
         // 存量坏链接会提取出坏路径，在每次更新后继续传播 404。
-        let doc_path = format!(
-            "{}/SKILL.md",
-            remote_match.directory.trim_end_matches('/')
-        );
+        let doc_path = format!("{}/SKILL.md", remote_match.directory.trim_end_matches('/'));
         let readme_url = Self::build_skill_doc_url(&owner, &name, &used_branch, &doc_path);
 
         let updated_metadata = InstalledSkill {
@@ -2488,7 +2504,11 @@ impl SkillService {
                 .ok()
                 .and_then(|link| {
                     let parent = target.parent()?;
-                    let resolved = if link.is_absolute() { link } else { parent.join(link) };
+                    let resolved = if link.is_absolute() {
+                        link
+                    } else {
+                        parent.join(link)
+                    };
                     resolved.canonicalize().ok()
                 })
                 .and_then(|resolved| ssot_source.canonicalize().ok().map(|s| resolved == s))
@@ -2511,6 +2531,24 @@ impl SkillService {
             )));
         }
 
+        // 中间组件（<project_root>/.agents、.agents/skills）若被恶意仓库
+        // 预置成 symlink（git clone 会保留），create_dir_all/create_symlink
+        // 会顺着它把目录和链接写到项目外，必须拒绝
+        let mut ancestor = target.parent().map(Path::to_path_buf);
+        while let Some(dir) = ancestor {
+            if dir == project_root {
+                break;
+            }
+            if Self::is_symlink(&dir) {
+                return Err(anyhow!(format_skill_error(
+                    "DEPLOY_TARGET_CONFLICT",
+                    &[("path", &dir.display().to_string())],
+                    Some("checkProjectSkills"),
+                )));
+            }
+            ancestor = dir.parent().map(Path::to_path_buf);
+        }
+
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent)?;
         }
@@ -2522,10 +2560,7 @@ impl SkillService {
     ///
     /// 返回是否实际删除；目标不存在 → false（幂等成功）；目标不是指向
     /// SSOT 源的链接 → 拒绝（DEPLOY_TARGET_NOT_OURS），只清理自己创建的产物。
-    fn undeploy_symlink_from_project(
-        ssot_source: &Path,
-        project_root: &Path,
-    ) -> Result<bool> {
+    fn undeploy_symlink_from_project(ssot_source: &Path, project_root: &Path) -> Result<bool> {
         let target = Self::project_skill_target(ssot_source, project_root)?;
 
         if target.symlink_metadata().is_err() {
@@ -2542,7 +2577,11 @@ impl SkillService {
             .ok()
             .and_then(|link| {
                 let parent = target.parent()?;
-                let resolved = if link.is_absolute() { link } else { parent.join(link) };
+                let resolved = if link.is_absolute() {
+                    link
+                } else {
+                    parent.join(link)
+                };
                 resolved.canonicalize().ok()
             })
             .and_then(|resolved| ssot_source.canonicalize().ok().map(|s| resolved == s))
@@ -4564,9 +4603,14 @@ fn build_repo_info_from_lock(
         Some(info) => {
             let branch = info.branch.clone();
             let url_branch = branch.clone().unwrap_or_else(|| "HEAD".to_string());
-            // 优先使用 lock 文件中的 skillPath，否则回退到 dir_name/SKILL.md
+            // 优先使用 lock 文件中的 skillPath，否则回退到 dir_name/SKILL.md；
+            // lock 在 SSOT 之外、可能被本地工具改写，同样过 doc_path 守卫
             let fallback = format!("{dir_name}/SKILL.md");
-            let doc_path = info.skill_path.as_deref().unwrap_or(&fallback);
+            let doc_path = info
+                .skill_path
+                .as_deref()
+                .filter(|p| SkillService::is_safe_doc_path(p))
+                .unwrap_or(&fallback);
             let url =
                 SkillService::build_skill_doc_url(&info.owner, &info.repo, &url_branch, doc_path);
             (
@@ -4783,6 +4827,54 @@ mod tests {
     }
 
     #[test]
+    fn extract_doc_path_rejects_traversal_segments() {
+        // 污染的存量 readme_url：doc_path 含 ".."，绝不能原样拼回文档链接
+        assert_eq!(
+            SkillService::extract_doc_path_from_url(
+                "https://github.com/o/r/blob/main/../../evil/SKILL.md"
+            ),
+            None
+        );
+        // 反斜杠与控制字符同样拒绝
+        assert_eq!(
+            SkillService::extract_doc_path_from_url(
+                "https://github.com/o/r/blob/main/teach\\SKILL.md"
+            ),
+            None
+        );
+        assert_eq!(
+            SkillService::extract_doc_path_from_url(
+                "https://github.com/o/r/blob/main/teach\u{0000}/SKILL.md"
+            ),
+            None
+        );
+        // 百分号编码点段（%2e%2e）会被 WHATWG 打开器归一化为 ..，同样拒绝
+        assert_eq!(
+            SkillService::extract_doc_path_from_url(
+                "https://github.com/o/r/blob/main/%2e%2e/evil/SKILL.md"
+            ),
+            None
+        );
+        // 正常嵌套路径不受影响
+        assert_eq!(
+            SkillService::extract_doc_path_from_url(
+                "https://github.com/o/r/blob/main/skills/sub/SKILL.md"
+            ),
+            Some("skills/sub/SKILL.md".to_string())
+        );
+    }
+
+    #[test]
+    fn choose_doc_path_falls_back_when_readme_url_contains_traversal() {
+        let path = SkillService::choose_doc_path(
+            None,
+            Some("https://github.com/o/r/blob/main/../../evil/SKILL.md"),
+            "teach",
+        );
+        assert_eq!(path, "teach/SKILL.md");
+    }
+
+    #[test]
     fn deploy_symlink_creates_and_is_idempotent() {
         let ssot = tempdir().expect("ssot temp");
         let source = make_skill_source(&ssot);
@@ -4792,9 +4884,17 @@ mod tests {
             .expect("deploy creates symlink");
         assert!(matches!(outcome, ProjectDeployOutcome::Created));
 
-        let target = project.path().join(".agents/skills/yeepay-payment-integration");
-        assert!(SkillService::is_symlink(&target), "target must be a symlink");
-        assert!(target.join("SKILL.md").is_file(), "SKILL.md visible through link");
+        let target = project
+            .path()
+            .join(".agents/skills/yeepay-payment-integration");
+        assert!(
+            SkillService::is_symlink(&target),
+            "target must be a symlink"
+        );
+        assert!(
+            target.join("SKILL.md").is_file(),
+            "SKILL.md visible through link"
+        );
 
         // 幂等：重复部署同一 skill 报 AlreadyDeployed，不报错不重建
         let again = SkillService::deploy_symlink_to_project(&source, project.path())
@@ -4807,13 +4907,18 @@ mod tests {
         let ssot = tempdir().expect("ssot temp");
         let source = make_skill_source(&ssot);
         let project = tempdir().expect("project temp");
-        let occupied = project.path().join(".agents/skills/yeepay-payment-integration");
+        let occupied = project
+            .path()
+            .join(".agents/skills/yeepay-payment-integration");
         std::fs::create_dir_all(&occupied).expect("existing dir");
         std::fs::write(occupied.join("team-skill.md"), b"team content").expect("seed");
 
         let err = SkillService::deploy_symlink_to_project(&source, project.path())
             .expect_err("must refuse to touch existing content");
-        assert!(err.to_string().contains("DEPLOY_TARGET_CONFLICT"), "unexpected: {err}");
+        assert!(
+            err.to_string().contains("DEPLOY_TARGET_CONFLICT"),
+            "unexpected: {err}"
+        );
         // 原内容未被破坏
         assert_eq!(
             std::fs::read_to_string(occupied.join("team-skill.md")).unwrap(),
@@ -4829,7 +4934,50 @@ mod tests {
 
         let err = SkillService::deploy_symlink_to_project(&source, &ghost)
             .expect_err("must refuse missing project root");
-        assert!(err.to_string().contains("INVALID_PROJECT_ROOT"), "unexpected: {err}");
+        assert!(
+            err.to_string().contains("INVALID_PROJECT_ROOT"),
+            "unexpected: {err}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn deploy_symlink_rejects_symlinked_parent_components() {
+        let ssot = tempdir().expect("ssot temp");
+        let source = make_skill_source(&ssot);
+        let project = tempdir().expect("project temp");
+        let outside = tempdir().expect("outside temp");
+        // 恶意仓库预置 .agents -> 项目外目录（git clone 保留 symlink），
+        // create_dir_all/create_symlink 不得顺着它在项目外落地
+        std::os::unix::fs::symlink(outside.path(), project.path().join(".agents"))
+            .expect("seed symlinked .agents");
+
+        let err = SkillService::deploy_symlink_to_project(&source, project.path())
+            .expect_err("must refuse symlinked parent component");
+        assert!(
+            err.to_string().contains("DEPLOY_TARGET_CONFLICT"),
+            "unexpected: {err}"
+        );
+        // 项目外目录未被写入任何内容
+        let leaked = outside.path().join("skills");
+        assert!(
+            !leaked.exists(),
+            "must not create anything through the symlink: {}",
+            leaked.display()
+        );
+    }
+
+    #[test]
+    fn deploy_symlink_allows_plain_parent_directories() {
+        let ssot = tempdir().expect("ssot temp");
+        let source = make_skill_source(&ssot);
+        let project = tempdir().expect("project temp");
+        // 普通目录（甚至已存在的 .agents/skills）正常通过
+        std::fs::create_dir_all(project.path().join(".agents/skills")).expect("seed dirs");
+
+        let outcome = SkillService::deploy_symlink_to_project(&source, project.path())
+            .expect("plain dirs are fine");
+        assert!(matches!(outcome, ProjectDeployOutcome::Created));
     }
 
     #[test]
@@ -4842,7 +4990,9 @@ mod tests {
         let removed = SkillService::undeploy_symlink_from_project(&source, project.path())
             .expect("undeploy own symlink");
         assert!(removed);
-        let target = project.path().join(".agents/skills/yeepay-payment-integration");
+        let target = project
+            .path()
+            .join(".agents/skills/yeepay-payment-integration");
         assert!(!target.exists(), "symlink removed");
 
         // 幂等：已不存在时返回 false 而非报错
@@ -4854,10 +5004,12 @@ mod tests {
         std::fs::create_dir_all(&target).expect("foreign dir");
         let err = SkillService::undeploy_symlink_from_project(&source, project.path())
             .expect_err("must refuse foreign target");
-        assert!(err.to_string().contains("DEPLOY_TARGET_NOT_OURS"), "unexpected: {err}");
+        assert!(
+            err.to_string().contains("DEPLOY_TARGET_NOT_OURS"),
+            "unexpected: {err}"
+        );
         assert!(target.is_dir(), "foreign dir untouched");
     }
-
 
     // ===== 项目部署（服务层）=====
 
@@ -4902,7 +5054,10 @@ mod tests {
         SkillService::undeploy_skill_from_project_at(&db, &skill.id, project.path(), ssot.path())
             .expect("undeploy");
         assert!(db.get_skill_deployments(&skill.id).unwrap().is_empty());
-        assert!(!project.path().join(".agents/skills/yeepay-payment-integration").exists());
+        assert!(!project
+            .path()
+            .join(".agents/skills/yeepay-payment-integration")
+            .exists());
 
         // skill 不存在时报错
         let err = SkillService::deploy_skill_to_project_at(
@@ -4912,7 +5067,10 @@ mod tests {
             ssot.path(),
         )
         .expect_err("missing skill must error");
-        assert!(err.to_string().contains("Skill not found"), "unexpected: {err}");
+        assert!(
+            err.to_string().contains("Skill not found"),
+            "unexpected: {err}"
+        );
     }
 
     #[test]
@@ -4950,7 +5108,10 @@ mod tests {
         SkillService::cleanup_project_deployments(&db, &skill.id, ssot.path())
             .expect("cleanup on uninstall");
         assert!(db.get_skill_deployments(&skill.id).unwrap().is_empty());
-        assert!(!project.path().join(".agents/skills/yeepay-payment-integration").exists());
+        assert!(!project
+            .path()
+            .join(".agents/skills/yeepay-payment-integration")
+            .exists());
     }
 
     // ===== readme_url 存量纠偏 =====
@@ -4970,12 +5131,21 @@ mod tests {
     #[test]
     fn corrected_readme_url_returns_none_when_already_correct_or_absent() {
         let correct = "https://github.com/o/r/blob/main/skills/x/SKILL.md";
-        assert_eq!(SkillService::corrected_readme_url(Some(correct), "skills/x", "o", "r", "main"), None);
+        assert_eq!(
+            SkillService::corrected_readme_url(Some(correct), "skills/x", "o", "r", "main"),
+            None
+        );
         // 无存量 URL：安装路径负责写入，检查更新不做无中生有的回填
-        assert_eq!(SkillService::corrected_readme_url(None, "skills/x", "o", "r", "main"), None);
+        assert_eq!(
+            SkillService::corrected_readme_url(None, "skills/x", "o", "r", "main"),
+            None
+        );
         // 存量 URL 无法解析出文档路径：保持原状，交给后续真实更新处理
         let opaque = "https://example.com/docs";
-        assert_eq!(SkillService::corrected_readme_url(Some(opaque), "skills/x", "o", "r", "main"), None);
+        assert_eq!(
+            SkillService::corrected_readme_url(Some(opaque), "skills/x", "o", "r", "main"),
+            None
+        );
     }
 
     /// classify_repo_failure 把 download_repo 的最终错误映射为更新检测状态：
