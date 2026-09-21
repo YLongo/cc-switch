@@ -1219,10 +1219,15 @@ const BatchDeployDialog: React.FC<BatchDeployDialogProps> = ({
     return roots;
   }, [skills, selectedRoot]);
 
-  const toggleSelect = (id: string, checked: boolean) => {
+  const selectableIds = useMemo(
+    () => skills.filter((s) => !deployedInProject.has(s.id)).map((s) => s.id),
+    [skills, deployedInProject],
+  );
+
+  const toggleSelect = (id: string, on: boolean) => {
     setSelectedIds((prev) => {
       const next = new Set(prev);
-      if (checked) next.add(id);
+      if (on) next.add(id);
       else next.delete(id);
       return next;
     });
@@ -1290,33 +1295,65 @@ const BatchDeployDialog: React.FC<BatchDeployDialogProps> = ({
           )}
 
           {/* skill 多选列表 */}
-          <div className="max-h-64 overflow-y-auto rounded-md border border-border-default divide-y divide-border-default">
-            {skills.map((skill) => {
-              const alreadyDeployed = deployedInProject.has(skill.id);
-              return (
-                <label
-                  key={skill.id}
-                  className={cn(
-                    "flex items-center gap-2 px-3 py-1.5 text-sm",
-                    alreadyDeployed ? "opacity-50" : "cursor-pointer",
-                  )}
-                >
-                  <Checkbox
-                    checked={selectedIds.has(skill.id)}
-                    disabled={alreadyDeployed || isDeploying}
-                    onCheckedChange={(checked) =>
-                      toggleSelect(skill.id, checked === true)
+          <div className="rounded-md border border-border-default">
+            <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border-default bg-muted/40">
+              <Checkbox
+                checked={
+                  selectableIds.length > 0 &&
+                  selectableIds.every((id) => selectedIds.has(id))
+                    ? true
+                    : selectableIds.some((id) => selectedIds.has(id))
+                      ? "indeterminate"
+                      : false
+                }
+                disabled={selectableIds.length === 0 || isDeploying}
+                aria-label={t("skills.batchDeploySelectAll")}
+                onCheckedChange={() => {
+                  setSelectedIds((prev) => {
+                    const next = new Set(prev);
+                    const allIn =
+                      selectableIds.length > 0 &&
+                      selectableIds.every((id) => next.has(id));
+                    for (const id of selectableIds) {
+                      if (allIn) next.delete(id);
+                      else next.add(id);
                     }
-                  />
-                  <span className="truncate flex-1">{skill.name}</span>
-                  {alreadyDeployed && (
-                    <span className="text-[10px] text-muted-foreground shrink-0">
-                      {t("skills.batchDeployAlreadyDeployed")}
-                    </span>
-                  )}
-                </label>
-              );
-            })}
+                    return next;
+                  });
+                }}
+              />
+              <span className="text-xs text-muted-foreground">
+                {t("skills.batchDeploySelectAll")}
+              </span>
+            </div>
+            <div className="max-h-56 overflow-y-auto divide-y divide-border-default">
+              {skills.map((skill) => {
+                const alreadyDeployed = deployedInProject.has(skill.id);
+                return (
+                  <label
+                    key={skill.id}
+                    className={cn(
+                      "flex items-center gap-2 px-3 py-1.5 text-sm",
+                      alreadyDeployed ? "opacity-50" : "cursor-pointer",
+                    )}
+                  >
+                    <Checkbox
+                      checked={selectedIds.has(skill.id)}
+                      disabled={alreadyDeployed || isDeploying}
+                      onCheckedChange={(checked) =>
+                        toggleSelect(skill.id, checked === true)
+                      }
+                    />
+                    <span className="truncate flex-1">{skill.name}</span>
+                    {alreadyDeployed && (
+                      <span className="text-[10px] text-muted-foreground shrink-0">
+                        {t("skills.batchDeployAlreadyDeployed")}
+                      </span>
+                    )}
+                  </label>
+                );
+              })}
+            </div>
           </div>
 
           {/* 转专属选项（默认开） */}

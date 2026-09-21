@@ -2538,6 +2538,7 @@
     "batchDeployAlreadyDeployed": "Deployed",
     "batchDeployToast": "Deployed {{count}} skills to {{path}}",
     "batchDeployToastFailed": "Failed to deploy: {{names}} (target may already contain same-named content)",
+    "batchDeploySelectAll": "Select all",
     "statusRepoDeleted": "Repo deleted",
     "statusRepoDeletedHint": "The source repository was deleted or moved (404). Keep the local copy, or uninstall and reinstall from another repo.",
     "statusSkillDeleted": "Removed upstream",

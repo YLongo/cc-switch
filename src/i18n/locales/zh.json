@@ -2538,6 +2538,7 @@
     "batchDeployAlreadyDeployed": "已部署",
     "batchDeployToast": "已部署 {{count}} 个技能到 {{path}}",
     "batchDeployToastFailed": "以下技能部署失败：{{names}}（目标位置可能已有同名内容）",
+    "batchDeploySelectAll": "全选",
     "statusRepoDeleted": "仓库已删除",
     "statusRepoDeletedHint": "来源仓库已删除或转移（404）。可保留本地副本，或卸载后从其他仓库重新安装。",
     "statusSkillDeleted": "远端已删除",

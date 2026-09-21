@@ -1137,6 +1137,55 @@ describe("UnifiedSkillsPanel", () => {
     });
   });
 
+  it("select all toggles every selectable skill and skips deployed ones", async () => {
+    installedSkillsMock = [
+      makeInstalledSkill({
+        id: "owner/repo:alpha-skill",
+        name: "Alpha Skill",
+      }),
+      makeInstalledSkill({
+        id: "owner/repo:beta-skill",
+        name: "Beta Skill",
+      }),
+      makeInstalledSkill({
+        id: "owner/repo:gamma-skill",
+        name: "Gamma Skill",
+        deployments: [{ projectRoot: "/mock/selected-dir", deployedAt: 1 }],
+      }),
+    ];
+    const user = userEvent.setup();
+
+    renderPanel();
+    await user.click(screen.getByTitle("skills.batchDeployToProject"));
+    await user.click(
+      screen.getByRole("button", { name: "skills.deployPickDirectory" }),
+    );
+
+    // 全选：可选项全部勾上，已部署禁用项保持未选
+    await user.click(screen.getByLabelText("skills.batchDeploySelectAll"));
+    expect(
+      screen.getByRole("checkbox", { name: /Alpha Skill/ }),
+    ).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /Beta Skill/ })).toBeChecked();
+    expect(
+      screen.getByRole("checkbox", { name: /Gamma Skill/ }),
+    ).not.toBeChecked();
+
+    // 部署按钮文案反映数量（2 个可选项）——用 aria 断言部署可用即可
+    expect(
+      screen.getByRole("button", { name: /skills.deployConfirm/ }),
+    ).toBeEnabled();
+
+    // 再点全选：清空
+    await user.click(screen.getByLabelText("skills.batchDeploySelectAll"));
+    expect(
+      screen.getByRole("checkbox", { name: /Alpha Skill/ }),
+    ).not.toBeChecked();
+    expect(
+      screen.getByRole("button", { name: /skills.deployConfirm/ }),
+    ).toBeDisabled();
+  });
+
   it("disables skills already deployed to the selected project in batch dialog", async () => {
     installedSkillsMock = [
       makeInstalledSkill({

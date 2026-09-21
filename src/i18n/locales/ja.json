@@ -2538,6 +2538,7 @@
     "batchDeployAlreadyDeployed": "デプロイ済み",
     "batchDeployToast": "{{count}} 個のスキルを {{path}} にデプロイしました",
     "batchDeployToastFailed": "デプロイ失敗：{{names}}（対象位置に同名のコンテンツが存在する可能性）",
+    "batchDeploySelectAll": "すべて選択",
     "statusRepoDeleted": "リポジトリ削除済み",
     "statusRepoDeletedHint": "取得元のリポジトリが削除または移動されました（404）。ローカルコピーを保持するか、アンインストールして別のリポジトリから再インストールできます。",
     "statusSkillDeleted": "リモートで削除済み",
