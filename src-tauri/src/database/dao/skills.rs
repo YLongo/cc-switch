@@ -6,7 +6,7 @@
 //! - Skills 使用统一的 id 主键，支持四应用启用标志
 //! - 实际文件存储在 ~/.cc-switch/skills/，同步到各应用目录
 
-use crate::app_config::{InstalledSkill, SkillApps};
+use crate::app_config::{InstalledSkill, ProjectDeployment, SkillApps};
 use crate::database::{lock_conn, Database};
 use crate::error::AppError;
 use crate::services::skill::SkillRepo;
@@ -52,6 +52,7 @@ impl Database {
                     installed_at: row.get(14)?,
                     content_hash: row.get(15)?,
                     updated_at: row.get::<_, i64>(16).unwrap_or(0),
+                    deployments: Vec::new(),
                 })
             })
             .map_err(|e| AppError::Database(e.to_string()))?;
@@ -99,6 +100,7 @@ impl Database {
                 installed_at: row.get(14)?,
                 content_hash: row.get(15)?,
                 updated_at: row.get::<_, i64>(16).unwrap_or(0),
+                deployments: Vec::new(),
             })
         });
 
@@ -189,6 +191,14 @@ impl Database {
         let affected = conn
             .execute("DELETE FROM skills WHERE id = ?1", params![id])
             .map_err(|e| AppError::Database(e.to_string()))?;
+        if affected > 0 {
+            // 级联清理项目部署记录，避免悬空行让卸载遍历永远残留
+            conn.execute(
+                "DELETE FROM skill_project_deployments WHERE skill_id = ?1",
+                params![id],
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        }
         Ok(affected > 0)
     }
 
@@ -212,7 +222,61 @@ impl Database {
         Ok(affected > 0)
     }
 
-    /// 更新 Skill 的内容哈希和更新时间
+    // ===== 项目部署记录 =====
+
+    /// 登记一次项目部署；同一 (skill, project) 重复登记幂等（不报错、不重复）。
+    pub fn add_project_deployment(
+        &self,
+        skill_id: &str,
+        project_root: &str,
+        deployed_at: i64,
+    ) -> Result<(), AppError> {
+        let conn = lock_conn!(self.conn);
+        conn.execute(
+            "INSERT OR IGNORE INTO skill_project_deployments (skill_id, project_root, deployed_at)
+             VALUES (?1, ?2, ?3)",
+            params![skill_id, project_root, deployed_at],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// 移除一条项目部署记录；不存在时幂等成功。
+    pub fn remove_project_deployment(
+        &self,
+        skill_id: &str,
+        project_root: &str,
+    ) -> Result<(), AppError> {
+        let conn = lock_conn!(self.conn);
+        conn.execute(
+            "DELETE FROM skill_project_deployments WHERE skill_id = ?1 AND project_root = ?2",
+            params![skill_id, project_root],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// 查询某 skill 的全部项目部署。
+    pub fn get_skill_deployments(&self, skill_id: &str) -> Result<Vec<ProjectDeployment>, AppError> {
+        let conn = lock_conn!(self.conn);
+        let mut stmt = conn
+            .prepare(
+                "SELECT project_root, deployed_at FROM skill_project_deployments
+                 WHERE skill_id = ?1 ORDER BY deployed_at ASC",
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        let rows = stmt
+            .query_map(params![skill_id], |row| {
+                Ok(ProjectDeployment {
+                    project_root: row.get(0)?,
+                    deployed_at: row.get(1)?,
+                })
+            })
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AppError::Database(e.to_string()))
+    }
+
     /// 只重写 readme_url（存量坏链接纠偏），不动其他字段。
     /// 返回 false 表示目标行不存在（已被卸载）。
     pub fn update_skill_readme_url(&self, id: &str, readme_url: &str) -> Result<bool, AppError> {
@@ -226,6 +290,7 @@ impl Database {
         Ok(affected > 0)
     }
 
+    /// 更新 Skill 的内容哈希和更新时间
     pub fn update_skill_hash(
         &self,
         id: &str,
@@ -340,9 +405,59 @@ mod tests {
             installed_at: 1,
             content_hash: Some(format!("{name}-hash")),
             updated_at: 2,
+            deployments: Vec::new(),
         }
     }
 
+
+
+    // ===== 项目部署记录 =====
+
+    #[test]
+    fn project_deployment_roundtrip_and_idempotent_add() {
+        let db = Database::memory().expect("memory db");
+        let original = skill("owner/repo:skill", "original", SkillApps::only(&AppType::Pi));
+        db.save_skill(&original).expect("seed skill");
+
+        db.add_project_deployment(&original.id, "/tmp/proj-a", 100)
+            .expect("add deployment");
+        // 同一 (skill, project) 重复登记不报错也不产生重复行
+        db.add_project_deployment(&original.id, "/tmp/proj-a", 200)
+            .expect("re-add deployment is idempotent");
+
+        let deps = db.get_skill_deployments(&original.id).expect("query");
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].project_root, "/tmp/proj-a");
+
+        // 另一个项目共存
+        db.add_project_deployment(&original.id, "/tmp/proj-b", 300)
+            .expect("add second project");
+
+        let all = db.get_skill_deployments(&original.id).expect("query");
+        assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn remove_project_deployment_and_cascade_on_skill_delete() {
+        let db = Database::memory().expect("memory db");
+        let original = skill("owner/repo:skill", "original", SkillApps::only(&AppType::Pi));
+        db.save_skill(&original).expect("seed skill");
+        db.add_project_deployment(&original.id, "/tmp/proj-a", 100)
+            .expect("add deployment");
+
+        db.remove_project_deployment(&original.id, "/tmp/proj-a")
+            .expect("remove deployment");
+        assert!(db.get_skill_deployments(&original.id).expect("query").is_empty());
+        // 移除不存在的记录也成功（幂等）
+        db.remove_project_deployment(&original.id, "/tmp/proj-a")
+            .expect("remove missing deployment is idempotent");
+
+        db.add_project_deployment(&original.id, "/tmp/proj-c", 400)
+            .expect("re-add for cascade test");
+        db.delete_skill(&original.id).expect("delete skill");
+        // skill 行删除后部署记录随之清理（悬空记录会让卸载遍历永远删不掉）
+        assert!(db.get_skill_deployments(&original.id).expect("query").is_empty());
+    }
 
     #[test]
     fn update_skill_readme_url_rewrites_only_url_and_missing_returns_false() {

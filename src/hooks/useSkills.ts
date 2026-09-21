@@ -104,6 +104,38 @@ export function useInstallSkill() {
  * 卸载 Skill
  * 成功后直接移除已安装缓存，并在结束后收敛备份与未管理列表
  */
+export function useDeploySkillToProject() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      skillId,
+      projectRoot,
+    }: {
+      skillId: string;
+      projectRoot: string;
+    }) => skillsApi.deployToProject(skillId, projectRoot),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["skills", "installed"] });
+    },
+  });
+}
+
+export function useUndeploySkillFromProject() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      skillId,
+      projectRoot,
+    }: {
+      skillId: string;
+      projectRoot: string;
+    }) => skillsApi.undeployFromProject(skillId, projectRoot),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["skills", "installed"] });
+    },
+  });
+}
+
 export function useUninstallSkill() {
   const queryClient = useQueryClient();
   return useMutation({

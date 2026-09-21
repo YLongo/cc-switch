@@ -117,7 +117,20 @@ impl Database {
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
-        // 7. Settings 表
+        // 7. Skill 项目部署记录表
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS skill_project_deployments (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            skill_id TEXT NOT NULL,
+            project_root TEXT NOT NULL,
+            deployed_at INTEGER NOT NULL DEFAULT 0,
+            UNIQUE(skill_id, project_root)
+        )",
+            [],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
+        // 8. Settings 表
         conn.execute(
             "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)",
             [],
@@ -563,6 +576,21 @@ impl Database {
                             }
                         }
                         Self::set_user_version(conn, 19)?;
+                    }
+                    19 => {
+                        log::info!("迁移数据库从 v19 到 v20（Skill 项目部署记录表）");
+                        conn.execute(
+                            "CREATE TABLE IF NOT EXISTS skill_project_deployments (
+                                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                skill_id TEXT NOT NULL,
+                                project_root TEXT NOT NULL,
+                                deployed_at INTEGER NOT NULL DEFAULT 0,
+                                UNIQUE(skill_id, project_root)
+                            )",
+                            [],
+                        )
+                        .map_err(|e| AppError::Database(e.to_string()))?;
+                        Self::set_user_version(conn, 20)?;
                     }
                     _ => {
                         return Err(AppError::Database(format!(

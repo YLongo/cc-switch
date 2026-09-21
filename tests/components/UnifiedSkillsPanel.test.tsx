@@ -22,6 +22,8 @@ const restoreSkillBackupMock = vi.fn();
 const bulkToggleSkillAppMock = vi.fn();
 const checkUpdatesMock = vi.fn();
 const updateSkillMock = vi.fn();
+const deployProjectMock = vi.fn();
+const undeployProjectMock = vi.fn();
 const refetchSkillBackupsMock = vi.fn();
 const { toastErrorMock, toastSuccessMock, toastWarningMock, toastInfoMock } =
   vi.hoisted(() => ({
@@ -108,6 +110,14 @@ vi.mock("@/hooks/useSkills", () => ({
   }),
   useUpdateSkill: () => ({
     mutateAsync: updateSkillMock,
+    isPending: false,
+  }),
+  useDeploySkillToProject: () => ({
+    mutateAsync: deployProjectMock,
+    isPending: false,
+  }),
+  useUndeploySkillFromProject: () => ({
+    mutateAsync: undeployProjectMock,
     isPending: false,
   }),
 }));
@@ -951,6 +961,94 @@ describe("UnifiedSkillsPanel", () => {
       "aria-pressed",
       "false",
     );
+  });
+
+  it("opens deploy dialog and deploys skill to picked project directory", async () => {
+    installedSkillsMock = [
+      makeInstalledSkill({
+        name: "Yeepay Skill",
+        directory: "yeepay-payment-integration",
+        apps: { claude: false },
+      }),
+    ];
+    deployProjectMock.mockResolvedValue({
+      outcome: "created",
+      deployment: { projectRoot: "/mock/selected-dir", deployedAt: 1 },
+    });
+    const user = userEvent.setup();
+
+    renderPanel();
+
+    await user.click(screen.getByTitle("skills.deployToProject"));
+
+    // 全局未启用：不出现冲突提醒（i18n 空资源时 t() 返回 key 本身）
+    expect(screen.queryByText(/deployGlobalConflict/)).not.toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: "skills.deployPickDirectory" }),
+    );
+
+    // 落点预览可见所选目录
+    expect(
+      screen.getByText(
+        /\/mock\/selected-dir\/\.agents\/skills\/yeepay-payment-integration/,
+      ),
+    ).toBeInTheDocument();
+
+    await user.click(
+      screen.getByRole("button", { name: "skills.deployConfirm" }),
+    );
+
+    await waitFor(() =>
+      expect(deployProjectMock).toHaveBeenCalledWith({
+        skillId: "owner/repo:alpha-skill",
+        projectRoot: "/mock/selected-dir",
+      }),
+    );
+    expect(toastSuccessMock).toHaveBeenCalledWith("skills.deployToastCreated");
+  });
+
+  it("warns when deploying a globally enabled skill", async () => {
+    installedSkillsMock = [makeInstalledSkill({ apps: { claude: true } })];
+    const user = userEvent.setup();
+
+    renderPanel();
+
+    await user.click(screen.getByTitle("skills.deployToProject"));
+
+    expect(screen.getByText(/deployGlobalConflict/)).toBeInTheDocument();
+  });
+
+  it("shows deployment count badge and removes a deployment", async () => {
+    installedSkillsMock = [
+      makeInstalledSkill({
+        name: "Yeepay Skill",
+        deployments: [
+          { projectRoot: "/Users/x/hsf-server", deployedAt: 1 },
+          { projectRoot: "/Users/x/other", deployedAt: 2 },
+        ],
+      }),
+    ];
+    undeployProjectMock.mockResolvedValue(undefined);
+    const user = userEvent.setup();
+
+    renderPanel();
+
+    // 徽章显示部署数（徽章本身是打开弹窗的入口）
+    await user.click(screen.getByTitle("skills.deployedProjects"));
+
+    expect(screen.getByText("/Users/x/hsf-server")).toBeInTheDocument();
+    expect(screen.getByText("/Users/x/other")).toBeInTheDocument();
+
+    await user.click(screen.getAllByTitle("skills.deployRemove")[0]);
+
+    await waitFor(() =>
+      expect(undeployProjectMock).toHaveBeenCalledWith({
+        skillId: "owner/repo:alpha-skill",
+        projectRoot: "/Users/x/hsf-server",
+      }),
+    );
+    expect(toastSuccessMock).toHaveBeenCalledWith("skills.deployRemovedToast");
   });
 
   it("does not add an inactive Pi toggle outside the Pi context", () => {

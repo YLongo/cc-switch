@@ -1539,6 +1539,8 @@ pub fn run() {
             commands::import_skills_from_apps,
             commands::discover_available_skills,
             commands::check_skill_updates,
+            commands::deploy_skill_to_project,
+            commands::undeploy_skill_from_project,
             commands::update_skill,
             commands::migrate_skill_storage,
             commands::search_skills_sh,

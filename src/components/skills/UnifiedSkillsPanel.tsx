@@ -7,6 +7,9 @@ import {
   RefreshCw,
   Loader2,
   Search,
+  FolderUp,
+  FolderGit2,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -26,12 +29,15 @@ import {
   useInstallSkillsFromZip,
   useCheckSkillUpdates,
   useUpdateSkill,
+  useDeploySkillToProject,
+  useUndeploySkillFromProject,
   type InstalledSkill,
   type SkillUpdateInfo,
 } from "@/hooks/useSkills";
 import type { SkillUpdateStatus } from "@/lib/api/skills";
 import type { AppId } from "@/lib/api/types";
 import { cn } from "@/lib/utils";
+import { extractErrorMessage } from "@/utils/errorUtils";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { settingsApi, skillsApi } from "@/lib/api";
 import { toast } from "sonner";
@@ -102,6 +108,10 @@ const UnifiedSkillsPanel = React.forwardRef<
   } | null>(null);
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [restoreDialogOpen, setRestoreDialogOpen] = useState(false);
+  const [deployDialogSkill, setDeployDialogSkill] =
+    useState<InstalledSkill | null>(null);
+  const deployProjectMutation = useDeploySkillToProject();
+  const undeployProjectMutation = useUndeploySkillFromProject();
   const [searchQuery, setSearchQuery] = useState("");
   const [writePending, setWritePending] = useState(false);
   const writeLockRef = React.useRef(false);
@@ -318,6 +328,53 @@ const UnifiedSkillsPanel = React.forwardRef<
       endWrite();
     }
   };
+
+  const handleDeployToProject = async (
+    skill: InstalledSkill,
+    projectRoot: string,
+  ) => {
+    try {
+      const { outcome } = await deployProjectMutation.mutateAsync({
+        skillId: skill.id,
+        projectRoot,
+      });
+      if (outcome === "created") {
+        toast.success(
+          t("skills.deployToastCreated", {
+            name: skill.name,
+            path: projectRoot,
+          }),
+        );
+      } else {
+        toast.info(t("skills.deployToastAlready", { path: projectRoot }));
+      }
+    } catch (e) {
+      toast.error(extractErrorMessage(e));
+    }
+  };
+
+  const handleUndeployFromProject = async (
+    skill: InstalledSkill,
+    projectRoot: string,
+  ) => {
+    try {
+      await undeployProjectMutation.mutateAsync({
+        skillId: skill.id,
+        projectRoot,
+      });
+      toast.success(t("skills.deployRemovedToast", { path: projectRoot }));
+    } catch (e) {
+      toast.error(extractErrorMessage(e));
+    }
+  };
+
+  const knownProjectRoots = useMemo(() => {
+    const roots = new Set<string>();
+    for (const s of skills ?? []) {
+      for (const d of s.deployments ?? []) roots.add(d.projectRoot);
+    }
+    return Array.from(roots);
+  }, [skills]);
 
   const handleUninstall = (skill: InstalledSkill) => {
     if (
@@ -754,6 +811,7 @@ const UnifiedSkillsPanel = React.forwardRef<
                     onToggleApp={handleToggleApp}
                     onUninstall={() => handleUninstall(skill)}
                     onUpdate={() => handleUpdateSkill(skill)}
+                    onDeployProject={() => setDeployDialogSkill(skill)}
                     isLast={index === filteredSkills.length - 1}
                   />
                 ))}
@@ -774,6 +832,20 @@ const UnifiedSkillsPanel = React.forwardRef<
           pending={writePending}
           onConfirm={confirmDialog.onConfirm}
           onCancel={() => setConfirmDialog(null)}
+        />
+      )}
+
+      {deployDialogSkill && (
+        <ProjectDeployDialog
+          skill={deployDialogSkill}
+          knownProjects={knownProjectRoots}
+          isDeploying={deployProjectMutation.isPending}
+          isUndeploying={undeployProjectMutation.isPending}
+          onDeploy={(root) => handleDeployToProject(deployDialogSkill, root)}
+          onUndeploy={(root) =>
+            handleUndeployFromProject(deployDialogSkill, root)
+          }
+          onClose={() => setDeployDialogSkill(null)}
         />
       )}
 
@@ -812,6 +884,8 @@ interface InstalledSkillListItemProps {
   onToggleApp: (id: string, app: AppId, enabled: boolean) => void;
   onUninstall: () => void;
   onUpdate?: () => void;
+  /** 打开「应用到项目」弹窗 */
+  onDeployProject?: () => void;
   isLast?: boolean;
 }
 
@@ -824,6 +898,7 @@ const InstalledSkillListItem: React.FC<InstalledSkillListItemProps> = ({
   onToggleApp,
   onUninstall,
   onUpdate,
+  onDeployProject,
   isLast,
 }) => {
   const { t } = useTranslation();
@@ -911,6 +986,22 @@ const InstalledSkillListItem: React.FC<InstalledSkillListItemProps> = ({
           <span className="text-xs text-muted-foreground/50 flex-shrink-0">
             {sourceLabel}
           </span>
+          {(skill.deployments?.length ?? 0) > 0 && (
+            <button
+              type="button"
+              onClick={onDeployProject}
+              className="flex-shrink-0"
+              title={t("skills.deployedProjects")}
+            >
+              <Badge
+                variant="outline"
+                className="text-[10px] px-1.5 py-0 h-4 border-blue-500/50 text-blue-600 dark:text-blue-400"
+              >
+                <FolderGit2 size={9} className="mr-0.5" />
+                {skill.deployments!.length}
+              </Badge>
+            </button>
+          )}
           {statusBadge}
         </div>
         {skill.description && (
@@ -954,6 +1045,19 @@ const InstalledSkillListItem: React.FC<InstalledSkillListItemProps> = ({
             )}
           </Button>
         )}
+        {onDeployProject && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon"
+            className="h-7 w-7 hover:text-blue-500 hover:bg-blue-100 dark:hover:text-blue-400 dark:hover:bg-blue-500/10"
+            onClick={onDeployProject}
+            disabled={actionsDisabled}
+            title={t("skills.deployToProject")}
+          >
+            <FolderUp size={14} />
+          </Button>
+        )}
         <Button
           type="button"
           variant="ghost"
@@ -967,6 +1071,180 @@ const InstalledSkillListItem: React.FC<InstalledSkillListItemProps> = ({
         </Button>
       </div>
     </ListItemRow>
+  );
+};
+
+// ===== 项目部署弹窗 =====
+// 领域（见 CONTEXT.md）：项目部署 = symlink 指回 SSOT 本体，落在项目
+// `.agents/skills/`（pi 与 Codex 共同识别）；与全局部署正交，同名共存时
+// pi 会警告重复，故全局启用时给出黄条提醒。
+
+interface ProjectDeployDialogProps {
+  skill: InstalledSkill;
+  /** 历史部署过的项目路径（全部 skills 去重，用于快速复选） */
+  knownProjects: string[];
+  isDeploying: boolean;
+  isUndeploying: boolean;
+  onDeploy: (projectRoot: string) => void;
+  onUndeploy: (projectRoot: string) => void;
+  onClose: () => void;
+}
+
+const ProjectDeployDialog: React.FC<ProjectDeployDialogProps> = ({
+  skill,
+  knownProjects,
+  isDeploying,
+  isUndeploying,
+  onDeploy,
+  onUndeploy,
+  onClose,
+}) => {
+  const { t } = useTranslation();
+  const [selectedRoot, setSelectedRoot] = useState<string | null>(null);
+
+  const deployments = skill.deployments ?? [];
+  const deployedRoots = new Set(deployments.map((d) => d.projectRoot));
+  const candidateProjects = knownProjects.filter(
+    (root) => !deployedRoots.has(root),
+  );
+
+  const globallyEnabled = Boolean(
+    skill.apps.claude ||
+      skill.apps.codex ||
+      skill.apps.gemini ||
+      skill.apps.grokbuild ||
+      skill.apps.opencode ||
+      skill.apps.openclaw ||
+      skill.apps.hermes ||
+      skill.apps.pi ||
+      skill.apps.mcode,
+  );
+
+  const pickDirectory = async () => {
+    try {
+      const picked = await settingsApi.pickDirectory();
+      if (picked) setSelectedRoot(picked);
+    } catch {
+      // 用户取消或系统对话框失败，忽略
+    }
+  };
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle>
+            {t("skills.deployDialogTitle", { name: skill.name })}
+          </DialogTitle>
+          <DialogDescription>
+            {t("skills.deployDialogDescription")}
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-3">
+          {/* 全局启用冲突提醒（正交但同名共存 pi 会警告） */}
+          {globallyEnabled && (
+            <div className="rounded-md border border-amber-500/50 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
+              {t("skills.deployGlobalConflict")}
+            </div>
+          )}
+
+          {/* 目标路径选择 */}
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={pickDirectory}
+            >
+              <FolderGit2 size={14} className="mr-1" />
+              {t("skills.deployPickDirectory")}
+            </Button>
+            {selectedRoot && (
+              <span className="text-xs text-muted-foreground truncate flex-1">
+                {selectedRoot}
+              </span>
+            )}
+          </div>
+
+          {/* 历史项目快捷选择 */}
+          {candidateProjects.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {candidateProjects.map((root) => (
+                <button
+                  key={root}
+                  type="button"
+                  onClick={() => setSelectedRoot(root)}
+                  className={cn(
+                    "rounded-md border px-2 py-0.5 text-[11px] transition-colors truncate max-w-[180px]",
+                    selectedRoot === root
+                      ? "border-blue-500 bg-blue-500/10 text-blue-600 dark:text-blue-400"
+                      : "border-border-default text-muted-foreground hover:text-foreground",
+                  )}
+                  title={root}
+                >
+                  {root}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* 落点预览 */}
+          <div className="rounded-md bg-muted px-3 py-2 font-mono text-[11px] text-muted-foreground break-all">
+            {(selectedRoot ?? t("skills.deployTargetPlaceholder")) +
+              "/.agents/skills/" +
+              skill.directory}
+          </div>
+
+          {/* 已部署列表 */}
+          {deployments.length > 0 && (
+            <div className="space-y-1">
+              <p className="text-xs font-medium text-foreground">
+                {t("skills.deployedProjects")}
+              </p>
+              {deployments.map((d) => (
+                <div
+                  key={d.projectRoot}
+                  className="flex items-center justify-between gap-2 rounded-md border border-border-default px-2 py-1"
+                >
+                  <span
+                    className="text-[11px] text-muted-foreground truncate font-mono"
+                    title={d.projectRoot}
+                  >
+                    {d.projectRoot}
+                  </span>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-6 w-6 shrink-0 hover:text-red-500"
+                    disabled={isUndeploying}
+                    onClick={() => onUndeploy(d.projectRoot)}
+                    title={t("skills.deployRemove")}
+                  >
+                    <X size={12} />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <Button
+            type="button"
+            className="w-full"
+            disabled={!selectedRoot || isDeploying}
+            onClick={() => selectedRoot && onDeploy(selectedRoot)}
+          >
+            {isDeploying ? (
+              <Loader2 size={14} className="mr-1 animate-spin" />
+            ) : (
+              <FolderUp size={14} className="mr-1" />
+            )}
+            {t("skills.deployConfirm")}
+          </Button>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 };
 

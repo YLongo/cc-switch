@@ -25,6 +25,29 @@ RemoteDeleted 状态下"更新"动作不可用（远端无货可拉），由用�
 
 远端目录消失但以新名称存在。**不自动检测**（无可靠信号），仅在 SkillDeleted 的提示文案中引导用户到发现面板搜索新名称。
 
+## Skills 部署作用域
+
+### SSOT（单一事实源）
+
+cc-switch 管理的 skill 本体所在的集中目录。所有部署（全局或项目）都从这里分发。更新检测、卸载都以 SSOT 为准。
+
+### 全局部署（Global Deployment）
+
+把 SSOT 的 skill 同步到某 agent 的全局 skill 目录，对该 agent 的**所有工作目录**生效。现有的"应用"即指此。
+
+### 项目部署（Project Deployment）
+
+把 SSOT 的 skill 以 symlink 指回 SSOT 本体，部署到某个**特定工作目录**的 `.agents/skills/` 下。一次部署同时被 pi 与 Codex 识别（两家都扫项目 `.agents/skills/`）；Claude Code 目前不识别该位置（非本期范围）。
+
+边界：
+- 项目部署与全局部署**正交**，同一 skill 可两者兼有；但同名同时存在时 pi 会警告重复，UI 需提醒。
+- cc-switch 无法做到"全局部署但在某些目录不加载"——agent 没有按项目排除的机制，项目化只能靠"项目部署 + 不开全局"。
+- 项目部署物落在用户的 git 仓库内，主权属于用户仓库：写入仅限自己创建的 symlink，绝不碰非本工具创建的同名目录。
+
+### 悬空链接（Dangling Symlink）
+
+SSOT 本体被删而项目部署的 symlink 未清理的残留。卸载必须遍历部署记录清理自己创建的 symlink，避免 agent 加载报错。
+
 ## 通用规则
 
 - 确定性/不确定性是本域的核心边界：只有确定性信号（4xx 中的 404/410、目录匹配失败）才允许触发"已删除"表述；一切网络性失败归 Unreachable。

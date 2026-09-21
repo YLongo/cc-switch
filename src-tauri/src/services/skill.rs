@@ -15,7 +15,7 @@ use std::sync::{Arc, OnceLock, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::time::timeout;
 
-use crate::app_config::{AppType, InstalledSkill, SkillApps, UnmanagedSkill};
+use crate::app_config::{AppType, InstalledSkill, ProjectDeployment, SkillApps, UnmanagedSkill};
 use crate::config::get_app_config_dir;
 use crate::database::Database;
 use crate::error::format_skill_error;
@@ -222,6 +222,14 @@ pub enum SkillUpdateStatus {
     SkillDeleted,
     /// 超时/网络/限流等不确定失败，无法下结论
     Unreachable,
+}
+
+/// 项目部署动作结果：新建 / 已存在（幂等成功）
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProjectDeployOutcome {
+    Created,
+    AlreadyDeployed,
 }
 
 /// Skill 更新检测结果
@@ -727,6 +735,9 @@ impl SkillService {
         let mut skills = db.get_all_installed_skills()?;
         for skill in skills.values_mut() {
             skill.apps.pi = Self::skill_exists_in_app(&skill.directory, &AppType::Pi);
+            if let Ok(deployments) = db.get_skill_deployments(&skill.id) {
+                skill.deployments = deployments;
+            }
         }
         Ok(skills.into_values().collect())
     }
@@ -963,6 +974,7 @@ impl SkillService {
             installed_at: chrono::Utc::now().timestamp(),
             content_hash,
             updated_at: 0,
+            deployments: Vec::new(),
         };
 
         Self::persist_and_sync_new_skill(db, &installed_skill, current_app)?;
@@ -1002,6 +1014,11 @@ impl SkillService {
             match Self::require_valid_directory(&skill.directory) {
                 Ok(directory) => {
                     let ssot_dir = Self::get_ssot_dir()?;
+                    // 项目部署（symlink 指回 SSOT）必须在删除 SSOT 本体前清理，
+                    // 否则留下悬空链接，pi/Codex 加载时报错
+                    if let Err(e) = Self::cleanup_project_deployments(db, id, &ssot_dir) {
+                        log::warn!("Skill {id} 清理项目部署失败（继续卸载）: {e}");
+                    }
                     let source = ssot_dir.join(&directory);
                     let mcode_destination = if skill.apps.mcode {
                         let destination =
@@ -1623,6 +1640,7 @@ impl SkillService {
             installed_at: skill.installed_at,
             content_hash: new_hash,
             updated_at: chrono::Utc::now().timestamp(),
+            deployments: Vec::new(),
         };
 
         let mut updated_skill = if skill.apps.mcode {
@@ -2304,6 +2322,7 @@ impl SkillService {
                 installed_at: chrono::Utc::now().timestamp(),
                 content_hash,
                 updated_at: 0,
+                deployments: Vec::new(),
             };
 
             // 保存到数据库
@@ -2326,6 +2345,219 @@ impl SkillService {
     }
 
     // ========== 文件同步方法 ==========
+
+    // ===== 项目部署（服务层组合）=====
+
+    /// 把已安装的 skill 以 symlink 部署到指定项目（公开入口，使用全局 SSOT）。
+    pub fn deploy_skill_to_project(
+        db: &Arc<Database>,
+        skill_id: &str,
+        project_root: &str,
+    ) -> Result<(ProjectDeployOutcome, ProjectDeployment)> {
+        let ssot_dir = Self::get_ssot_dir()?;
+        let root = PathBuf::from(project_root);
+        Self::deploy_skill_to_project_at(db, skill_id, &root, &ssot_dir)
+    }
+
+    /// 部署核心（ssot_dir 参数化便于测试）：校验 skill → IO → 登记记录。
+    fn deploy_skill_to_project_at(
+        db: &Arc<Database>,
+        skill_id: &str,
+        project_root: &Path,
+        ssot_dir: &Path,
+    ) -> Result<(ProjectDeployOutcome, ProjectDeployment)> {
+        let skill = db
+            .get_installed_skill(skill_id)?
+            .ok_or_else(|| anyhow!("Skill not found: {skill_id}"))?;
+        let directory = Self::require_valid_directory(&skill.directory)?;
+        let source = ssot_dir.join(&directory);
+
+        let outcome = Self::deploy_symlink_to_project(&source, project_root)?;
+
+        let deployment = ProjectDeployment {
+            project_root: project_root.display().to_string(),
+            deployed_at: chrono::Utc::now().timestamp(),
+        };
+        db.add_project_deployment(skill_id, &deployment.project_root, deployment.deployed_at)?;
+        log::info!(
+            "Skill {} 部署到项目 {}（{:?}）",
+            skill_id,
+            deployment.project_root,
+            outcome
+        );
+        Ok((outcome, deployment))
+    }
+
+    /// 移除项目部署（公开入口，使用全局 SSOT）。
+    pub fn undeploy_skill_from_project(
+        db: &Arc<Database>,
+        skill_id: &str,
+        project_root: &str,
+    ) -> Result<()> {
+        let ssot_dir = Self::get_ssot_dir()?;
+        let root = PathBuf::from(project_root);
+        Self::undeploy_skill_from_project_at(db, skill_id, &root, &ssot_dir)
+    }
+
+    /// 移除核心：删链接（只删自己的）→ 删记录。
+    fn undeploy_skill_from_project_at(
+        db: &Arc<Database>,
+        skill_id: &str,
+        project_root: &Path,
+        ssot_dir: &Path,
+    ) -> Result<()> {
+        let skill = db
+            .get_installed_skill(skill_id)?
+            .ok_or_else(|| anyhow!("Skill not found: {skill_id}"))?;
+        let directory = Self::require_valid_directory(&skill.directory)?;
+        let source = ssot_dir.join(&directory);
+
+        Self::undeploy_symlink_from_project(&source, project_root)?;
+        db.remove_project_deployment(skill_id, &project_root.display().to_string())?;
+        Ok(())
+    }
+
+    /// 卸载时清理全部项目部署：遍历记录删链接；链接已被用户手动删除的悬空
+    /// 记录静默跳过；最终清空记录表。任何单项失败只警告，不阻塞卸载。
+    fn cleanup_project_deployments(
+        db: &Arc<Database>,
+        skill_id: &str,
+        ssot_dir: &Path,
+    ) -> Result<()> {
+        let deployments = db.get_skill_deployments(skill_id)?;
+        if deployments.is_empty() {
+            return Ok(());
+        }
+        let skill = db
+            .get_installed_skill(skill_id)?
+            .ok_or_else(|| anyhow!("Skill not found: {skill_id}"))?;
+        let directory = Self::require_valid_directory(&skill.directory)?;
+        let source = ssot_dir.join(&directory);
+
+        for deployment in &deployments {
+            let root = PathBuf::from(&deployment.project_root);
+            match Self::undeploy_symlink_from_project(&source, &root) {
+                Ok(_) => {}
+                Err(e) => log::warn!(
+                    "清理项目部署失败 {} @ {}: {e}（记录仍会移除）",
+                    skill_id,
+                    deployment.project_root
+                ),
+            }
+            db.remove_project_deployment(skill_id, &deployment.project_root)?;
+        }
+        Ok(())
+    }
+
+    // ===== 项目部署（symlink 纯 IO）=====
+
+    /// 项目内 skill 落点：`<project>/.agents/skills/<skill 目录名>`。
+    /// `.agents/skills/` 是 pi 与 Codex 共同识别的项目级位置（agentskills 约定）。
+    fn project_skill_target(ssot_source: &Path, project_root: &Path) -> Result<PathBuf> {
+        let name = ssot_source
+            .file_name()
+            .and_then(|n| n.to_str())
+            .ok_or_else(|| anyhow!("SSOT 源目录路径异常: {}", ssot_source.display()))?;
+        Ok(project_root.join(".agents").join("skills").join(name))
+    }
+
+    /// 在项目 `.agents/skills/` 下创建指回 SSOT 本体的 symlink。
+    ///
+    /// 三态：目标不存在 → 创建（Created）；目标已是本 skill 的链接 → 幂等
+    /// （AlreadyDeployed）；目标被其他内容占用（真实目录 / 指向他处的链接）→
+    /// 拒绝（DEPLOY_TARGET_CONFLICT），项目目录主权属于用户，绝不覆盖。
+    fn deploy_symlink_to_project(
+        ssot_source: &Path,
+        project_root: &Path,
+    ) -> Result<ProjectDeployOutcome> {
+        if !ssot_source.is_dir() {
+            return Err(anyhow!("SSOT 源目录不存在: {}", ssot_source.display()));
+        }
+        if !project_root.is_dir() {
+            return Err(anyhow!(format_skill_error(
+                "INVALID_PROJECT_ROOT",
+                &[("path", &project_root.display().to_string())],
+                Some("checkProjectPath"),
+            )));
+        }
+
+        let target = Self::project_skill_target(ssot_source, project_root)?;
+
+        if Self::is_symlink(&target) {
+            let points_to_source = std::fs::read_link(&target)
+                .ok()
+                .and_then(|link| {
+                    let parent = target.parent()?;
+                    let resolved = if link.is_absolute() { link } else { parent.join(link) };
+                    resolved.canonicalize().ok()
+                })
+                .and_then(|resolved| ssot_source.canonicalize().ok().map(|s| resolved == s))
+                .unwrap_or(false);
+            if points_to_source {
+                return Ok(ProjectDeployOutcome::AlreadyDeployed);
+            }
+            return Err(anyhow!(format_skill_error(
+                "DEPLOY_TARGET_CONFLICT",
+                &[("path", &target.display().to_string())],
+                Some("checkProjectSkills"),
+            )));
+        }
+        if target.exists() {
+            // 真实目录或文件（可能是团队共享内容），绝不覆盖
+            return Err(anyhow!(format_skill_error(
+                "DEPLOY_TARGET_CONFLICT",
+                &[("path", &target.display().to_string())],
+                Some("checkProjectSkills"),
+            )));
+        }
+
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        Self::create_symlink(&ssot_source.canonicalize()?, &target)?;
+        Ok(ProjectDeployOutcome::Created)
+    }
+
+    /// 移除项目 `.agents/skills/` 下本工具创建的 symlink。
+    ///
+    /// 返回是否实际删除；目标不存在 → false（幂等成功）；目标不是指向
+    /// SSOT 源的链接 → 拒绝（DEPLOY_TARGET_NOT_OURS），只清理自己创建的产物。
+    fn undeploy_symlink_from_project(
+        ssot_source: &Path,
+        project_root: &Path,
+    ) -> Result<bool> {
+        let target = Self::project_skill_target(ssot_source, project_root)?;
+
+        if target.symlink_metadata().is_err() {
+            return Ok(false);
+        }
+        if !Self::is_symlink(&target) {
+            return Err(anyhow!(format_skill_error(
+                "DEPLOY_TARGET_NOT_OURS",
+                &[("path", &target.display().to_string())],
+                Some("checkProjectSkills"),
+            )));
+        }
+        let is_ours = std::fs::read_link(&target)
+            .ok()
+            .and_then(|link| {
+                let parent = target.parent()?;
+                let resolved = if link.is_absolute() { link } else { parent.join(link) };
+                resolved.canonicalize().ok()
+            })
+            .and_then(|resolved| ssot_source.canonicalize().ok().map(|s| resolved == s))
+            .unwrap_or(false);
+        if !is_ours {
+            return Err(anyhow!(format_skill_error(
+                "DEPLOY_TARGET_NOT_OURS",
+                &[("path", &target.display().to_string())],
+                Some("checkProjectSkills"),
+            )));
+        }
+        std::fs::remove_file(&target)
+            .with_context(|| format!("移除项目部署链接失败: {}", target.display()))?;
+        Ok(true)
+    }
 
     /// 创建符号链接（跨平台）
     ///
@@ -4071,6 +4303,7 @@ impl SkillService {
                 installed_at: chrono::Utc::now().timestamp(),
                 content_hash,
                 updated_at: 0,
+                deployments: Vec::new(),
             };
 
             Self::persist_and_sync_new_skill(db, &skill, current_app)?;
@@ -4518,6 +4751,7 @@ pub fn migrate_skills_to_ssot(db: &Arc<Database>) -> Result<usize> {
             installed_at: chrono::Utc::now().timestamp(),
             content_hash,
             updated_at: 0,
+            deployments: Vec::new(),
         };
 
         db.save_skill(&skill)?;
@@ -4538,8 +4772,186 @@ mod tests {
 
     // ===== 更新检测状态分类 =====
 
-    /// classify_repo_failure 把 download_repo 的最终错误映射为更新检测状态：
-    /// 404/410 是确定性的「仓库已删除」，其余一律保守归类为「无法检查」。
+    // ===== 项目部署（symlink 纯 IO）=====
+
+    fn make_skill_source(temp: &tempfile::TempDir) -> std::path::PathBuf {
+        let source = temp.path().join("yeepay-payment-integration");
+        std::fs::create_dir_all(&source).expect("create source");
+        std::fs::write(source.join("SKILL.md"), b"---\nname: yeepay\n---\n")
+            .expect("write SKILL.md");
+        source
+    }
+
+    #[test]
+    fn deploy_symlink_creates_and_is_idempotent() {
+        let ssot = tempdir().expect("ssot temp");
+        let source = make_skill_source(&ssot);
+        let project = tempdir().expect("project temp");
+
+        let outcome = SkillService::deploy_symlink_to_project(&source, project.path())
+            .expect("deploy creates symlink");
+        assert!(matches!(outcome, ProjectDeployOutcome::Created));
+
+        let target = project.path().join(".agents/skills/yeepay-payment-integration");
+        assert!(SkillService::is_symlink(&target), "target must be a symlink");
+        assert!(target.join("SKILL.md").is_file(), "SKILL.md visible through link");
+
+        // 幂等：重复部署同一 skill 报 AlreadyDeployed，不报错不重建
+        let again = SkillService::deploy_symlink_to_project(&source, project.path())
+            .expect("re-deploy is idempotent");
+        assert!(matches!(again, ProjectDeployOutcome::AlreadyDeployed));
+    }
+
+    #[test]
+    fn deploy_symlink_rejects_conflicting_target() {
+        let ssot = tempdir().expect("ssot temp");
+        let source = make_skill_source(&ssot);
+        let project = tempdir().expect("project temp");
+        let occupied = project.path().join(".agents/skills/yeepay-payment-integration");
+        std::fs::create_dir_all(&occupied).expect("existing dir");
+        std::fs::write(occupied.join("team-skill.md"), b"team content").expect("seed");
+
+        let err = SkillService::deploy_symlink_to_project(&source, project.path())
+            .expect_err("must refuse to touch existing content");
+        assert!(err.to_string().contains("DEPLOY_TARGET_CONFLICT"), "unexpected: {err}");
+        // 原内容未被破坏
+        assert_eq!(
+            std::fs::read_to_string(occupied.join("team-skill.md")).unwrap(),
+            "team content"
+        );
+    }
+
+    #[test]
+    fn deploy_symlink_rejects_missing_project_root() {
+        let ssot = tempdir().expect("ssot temp");
+        let source = make_skill_source(&ssot);
+        let ghost = ssot.path().join("no-such-project");
+
+        let err = SkillService::deploy_symlink_to_project(&source, &ghost)
+            .expect_err("must refuse missing project root");
+        assert!(err.to_string().contains("INVALID_PROJECT_ROOT"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn undeploy_removes_own_symlink_and_refuses_foreign_targets() {
+        let ssot = tempdir().expect("ssot temp");
+        let source = make_skill_source(&ssot);
+        let project = tempdir().expect("project temp");
+        SkillService::deploy_symlink_to_project(&source, project.path()).expect("deploy");
+
+        let removed = SkillService::undeploy_symlink_from_project(&source, project.path())
+            .expect("undeploy own symlink");
+        assert!(removed);
+        let target = project.path().join(".agents/skills/yeepay-payment-integration");
+        assert!(!target.exists(), "symlink removed");
+
+        // 幂等：已不存在时返回 false 而非报错
+        let again = SkillService::undeploy_symlink_from_project(&source, project.path())
+            .expect("undeploy missing is idempotent");
+        assert!(!again);
+
+        // 非本工具创建的目录拒绝删除
+        std::fs::create_dir_all(&target).expect("foreign dir");
+        let err = SkillService::undeploy_symlink_from_project(&source, project.path())
+            .expect_err("must refuse foreign target");
+        assert!(err.to_string().contains("DEPLOY_TARGET_NOT_OURS"), "unexpected: {err}");
+        assert!(target.is_dir(), "foreign dir untouched");
+    }
+
+
+    // ===== 项目部署（服务层）=====
+
+    #[test]
+    fn deploy_skill_service_records_and_undeploy_clears() {
+        let db = std::sync::Arc::new(Database::memory().expect("memory db"));
+        let ssot = tempdir().expect("ssot temp");
+        make_skill_source(&ssot);
+        let project = tempdir().expect("project temp");
+
+        let skill = InstalledSkill {
+            id: "owner/repo:yeepay-payment-integration".into(),
+            name: "yeepay".into(),
+            description: None,
+            directory: "yeepay-payment-integration".into(),
+            repo_owner: Some("owner".into()),
+            repo_name: Some("repo".into()),
+            repo_branch: Some("main".into()),
+            readme_url: None,
+            apps: SkillApps::only(&AppType::Pi),
+            installed_at: 1,
+            content_hash: None,
+            updated_at: 0,
+            deployments: Vec::new(),
+        };
+        db.save_skill(&skill).expect("seed skill");
+
+        let (outcome, deployment) =
+            SkillService::deploy_skill_to_project_at(&db, &skill.id, project.path(), ssot.path())
+                .expect("deploy");
+        assert!(matches!(outcome, ProjectDeployOutcome::Created));
+        assert_eq!(deployment.project_root, project.path().to_string_lossy());
+
+        // 记录已入库，重复部署幂等
+        let (again, _) =
+            SkillService::deploy_skill_to_project_at(&db, &skill.id, project.path(), ssot.path())
+                .expect("re-deploy idempotent");
+        assert!(matches!(again, ProjectDeployOutcome::AlreadyDeployed));
+        assert_eq!(db.get_skill_deployments(&skill.id).unwrap().len(), 1);
+
+        // undeploy 清理链接与记录
+        SkillService::undeploy_skill_from_project_at(&db, &skill.id, project.path(), ssot.path())
+            .expect("undeploy");
+        assert!(db.get_skill_deployments(&skill.id).unwrap().is_empty());
+        assert!(!project.path().join(".agents/skills/yeepay-payment-integration").exists());
+
+        // skill 不存在时报错
+        let err = SkillService::deploy_skill_to_project_at(
+            &db,
+            "owner/repo:ghost",
+            project.path(),
+            ssot.path(),
+        )
+        .expect_err("missing skill must error");
+        assert!(err.to_string().contains("Skill not found"), "unexpected: {err}");
+    }
+
+    #[test]
+    fn cleanup_project_deployments_removes_links_and_survives_dangling() {
+        let db = std::sync::Arc::new(Database::memory().expect("memory db"));
+        let ssot = tempdir().expect("ssot temp");
+        make_skill_source(&ssot);
+        let project = tempdir().expect("project temp");
+
+        let skill = InstalledSkill {
+            id: "owner/repo:yeepay".into(),
+            name: "yeepay".into(),
+            description: None,
+            directory: "yeepay-payment-integration".into(),
+            repo_owner: Some("owner".into()),
+            repo_name: Some("repo".into()),
+            repo_branch: Some("main".into()),
+            readme_url: None,
+            apps: SkillApps::only(&AppType::Pi),
+            installed_at: 1,
+            content_hash: None,
+            updated_at: 0,
+            deployments: Vec::new(),
+        };
+        db.save_skill(&skill).expect("seed skill");
+        SkillService::deploy_skill_to_project_at(&db, &skill.id, project.path(), ssot.path())
+            .expect("deploy");
+
+        // 悬空记录：另一条部署的 symlink 已被用户手动删除
+        let ghost_project = tempdir().expect("ghost project");
+        db.add_project_deployment(&skill.id, ghost_project.path().to_str().unwrap(), 50)
+            .expect("dangling record");
+
+        // 卸载清理：两条记录都清掉，存在的链接删除，悬空的静默跳过
+        SkillService::cleanup_project_deployments(&db, &skill.id, ssot.path())
+            .expect("cleanup on uninstall");
+        assert!(db.get_skill_deployments(&skill.id).unwrap().is_empty());
+        assert!(!project.path().join(".agents/skills/yeepay-payment-integration").exists());
+    }
 
     // ===== readme_url 存量纠偏 =====
 
@@ -4566,6 +4978,8 @@ mod tests {
         assert_eq!(SkillService::corrected_readme_url(Some(opaque), "skills/x", "o", "r", "main"), None);
     }
 
+    /// classify_repo_failure 把 download_repo 的最终错误映射为更新检测状态：
+    /// 404/410 是确定性的「仓库已删除」，其余一律保守归类为「无法检查」。
     #[test]
     fn classify_repo_failure_maps_gone_statuses_to_repo_deleted() {
         let not_found =
@@ -6063,6 +6477,7 @@ mod tests {
             installed_at: 0,
             content_hash: None,
             updated_at: 0,
+            deployments: Vec::new(),
         }
     }
 

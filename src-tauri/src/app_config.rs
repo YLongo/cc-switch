@@ -248,6 +248,19 @@ pub struct InstalledSkill {
     /// 最近更新时间（Unix 时间戳，0 = 从未更新）
     #[serde(default)]
     pub updated_at: i64,
+    /// 项目级部署记录（symlink 指回 SSOT 本体）
+    #[serde(default)]
+    pub deployments: Vec<ProjectDeployment>,
+}
+
+/// Skill 的项目级部署记录（symlink 指回 SSOT 本体）
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectDeployment {
+    /// 部署目标项目根目录（绝对路径）
+    pub project_root: String,
+    /// 部署时间（Unix 时间戳）
+    pub deployed_at: i64,
 }
 
 /// 未管理的 Skill（在应用目录中发现但未被 CC Switch 管理）

@@ -28,6 +28,15 @@ export interface SkillApps {
   mcode?: boolean;
 }
 
+/** Skill 的项目级部署记录（symlink 指回 SSOT 本体） */
+export interface ProjectDeployment {
+  projectRoot: string;
+  deployedAt: number;
+}
+
+/** 项目部署动作结果：新建 / 已存在（幂等成功） */
+export type ProjectDeployOutcome = "created" | "already_deployed";
+
 /** 已安装的 Skill（v3.10.0+ 统一结构） */
 export interface InstalledSkill {
   id: string;
@@ -42,6 +51,8 @@ export interface InstalledSkill {
   installedAt: number;
   contentHash?: string;
   updatedAt: number;
+  /** 项目级部署记录（v3.20.x+） */
+  deployments?: ProjectDeployment[];
 }
 
 export interface SkillUninstallResult {
@@ -179,6 +190,25 @@ export const skillsApi = {
   /** 卸载 Skill（统一卸载） */
   async uninstallUnified(id: string): Promise<SkillUninstallResult> {
     return await invoke("uninstall_skill_unified", { id });
+  },
+
+  /** 把 Skill 以 symlink 部署到指定项目的 .agents/skills/ */
+  async deployToProject(
+    skillId: string,
+    projectRoot: string,
+  ): Promise<{ outcome: ProjectDeployOutcome; deployment: ProjectDeployment }> {
+    const [outcome, deployment] = await invoke<
+      [ProjectDeployOutcome, ProjectDeployment]
+    >("deploy_skill_to_project", { skillId, projectRoot });
+    return { outcome, deployment };
+  },
+
+  /** 移除 Skill 在指定项目的部署 */
+  async undeployFromProject(
+    skillId: string,
+    projectRoot: string,
+  ): Promise<void> {
+    await invoke("undeploy_skill_from_project", { skillId, projectRoot });
   },
 
   /** 从备份恢复 Skill */

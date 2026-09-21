@@ -143,6 +143,36 @@ pub async fn check_skill_updates(
         .map_err(|e| e.to_string())
 }
 
+/// 把 Skill 以 symlink 部署到指定项目（.agents/skills/）
+#[tauri::command]
+pub async fn deploy_skill_to_project(
+    service: State<'_, SkillServiceState>,
+    app_state: State<'_, AppState>,
+    skill_id: String,
+    project_root: String,
+) -> Result<serde_json::Value, String> {
+    let (outcome, deployment) = SkillService::deploy_skill_to_project(
+        &app_state.db,
+        &skill_id,
+        &project_root,
+    )
+    .map_err(|e| e.to_string())?;
+    serde_json::to_value((outcome, deployment))
+        .map_err(|e| e.to_string())
+}
+
+/// 移除 Skill 在指定项目的部署
+#[tauri::command]
+pub async fn undeploy_skill_from_project(
+    service: State<'_, SkillServiceState>,
+    app_state: State<'_, AppState>,
+    skill_id: String,
+    project_root: String,
+) -> Result<(), String> {
+    SkillService::undeploy_skill_from_project(&app_state.db, &skill_id, &project_root)
+        .map_err(|e| e.to_string())
+}
+
 /// 更新单个 Skill
 #[tauri::command]
 pub async fn update_skill(
