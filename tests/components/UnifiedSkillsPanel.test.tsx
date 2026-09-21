@@ -1006,6 +1006,27 @@ describe("UnifiedSkillsPanel", () => {
       }),
     );
     expect(toastSuccessMock).toHaveBeenCalledWith("skills.deployToastCreated");
+
+    // 部署成功后弹窗内立刻可见（无需关闭重开）：已部署区出现，
+    // 且所选路径同时出现在选择框与已部署列表两处
+    expect(
+      await screen.findByText("skills.deployedProjects"),
+    ).toBeInTheDocument();
+    expect(screen.getAllByText("/mock/selected-dir").length).toBe(2);
+  });
+
+  it("closes the deploy dialog via cancel button", async () => {
+    installedSkillsMock = [makeInstalledSkill()];
+    const user = userEvent.setup();
+
+    renderPanel();
+    await user.click(screen.getByTitle("skills.deployToProject"));
+    expect(screen.getByText(/\.agents\/skills\//)).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "common.cancel" }));
+
+    // 弹窗关闭：落点预览消失
+    expect(screen.queryByText(/\.agents\/skills\//)).not.toBeInTheDocument();
   });
 
   it("warns when deploying a globally enabled skill", async () => {

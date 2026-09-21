@@ -338,6 +338,19 @@ const UnifiedSkillsPanel = React.forwardRef<
         skillId: skill.id,
         projectRoot,
       });
+      setDeployDialogSkill((prev) =>
+        prev && prev.id === skill.id
+          ? {
+              ...prev,
+              deployments: [
+                ...(prev.deployments ?? []).filter(
+                  (d) => d.projectRoot !== projectRoot,
+                ),
+                { projectRoot, deployedAt: Date.now() },
+              ],
+            }
+          : prev,
+      );
       if (outcome === "created") {
         toast.success(
           t("skills.deployToastCreated", {
@@ -362,6 +375,16 @@ const UnifiedSkillsPanel = React.forwardRef<
         skillId: skill.id,
         projectRoot,
       });
+      setDeployDialogSkill((prev) =>
+        prev && prev.id === skill.id
+          ? {
+              ...prev,
+              deployments: (prev.deployments ?? []).filter(
+                (d) => d.projectRoot !== projectRoot,
+              ),
+            }
+          : prev,
+      );
       toast.success(t("skills.deployRemovedToast", { path: projectRoot }));
     } catch (e) {
       toast.error(extractErrorMessage(e));
@@ -1229,19 +1252,30 @@ const ProjectDeployDialog: React.FC<ProjectDeployDialogProps> = ({
             </div>
           )}
 
-          <Button
-            type="button"
-            className="w-full"
-            disabled={!selectedRoot || isDeploying}
-            onClick={() => selectedRoot && onDeploy(selectedRoot)}
-          >
-            {isDeploying ? (
-              <Loader2 size={14} className="mr-1 animate-spin" />
-            ) : (
-              <FolderUp size={14} className="mr-1" />
-            )}
-            {t("skills.deployConfirm")}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              type="button"
+              variant="outline"
+              className="flex-1"
+              onClick={onClose}
+              disabled={isDeploying}
+            >
+              {t("common.cancel")}
+            </Button>
+            <Button
+              type="button"
+              className="flex-1"
+              disabled={!selectedRoot || isDeploying}
+              onClick={() => selectedRoot && onDeploy(selectedRoot)}
+            >
+              {isDeploying ? (
+                <Loader2 size={14} className="mr-1 animate-spin" />
+              ) : (
+                <FolderUp size={14} className="mr-1" />
+              )}
+              {t("skills.deployConfirm")}
+            </Button>
+          </div>
         </div>
       </DialogContent>
     </Dialog>
