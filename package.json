@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "pnpm tauri dev",
     "build": "pnpm tauri build",
+    "build:app": "tauri build -b app",
     "tauri": "tauri",
     "dev:renderer": "vite",
     "build:renderer": "vite build",
