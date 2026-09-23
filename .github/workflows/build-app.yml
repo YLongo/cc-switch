@@ -1,0 +1,60 @@
+# 自建自用：push 到 local-first 后云端只打 x64 .app（无需签名 secrets）。
+# 下载：gh run download -n cc-switch-app -D /tmp/cc-app && ditto -x -k /tmp/cc-app/*.zip /tmp/cc-app/
+name: build-app
+
+on:
+  push:
+    branches: [local-first]
+  workflow_dispatch:
+
+concurrency:
+  group: build-app-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-app:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+
+      - name: Setup pnpm
+        env:
+          COREPACK_ENABLE_DOWNLOAD_PROMPT: "0"
+        run: |
+          corepack enable
+          corepack install
+          node --version
+          pnpm --version
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: Add Rust target (x86_64)
+        run: rustup target add x86_64-apple-darwin
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: x86_64-apple-darwin
+
+      - name: Build .app (x64 only, no bundle extras)
+        run: pnpm tauri build --target x86_64-apple-darwin -b app
+
+      - name: Zip .app (ditto 保留 symlink 与权限)
+        run: |
+          cd src-tauri/target/x86_64-apple-darwin/release/bundle/macos
+          ditto -c -k --sequesterRsrc --keepParent "CC Switch.app" "CC-Switch-x64.app.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cc-switch-app
+          path: src-tauri/target/x86_64-apple-darwin/release/bundle/macos/CC-Switch-x64.app.zip
+          retention-days: 14
