@@ -40,8 +40,9 @@ jobs:
           key: x86_64-apple-darwin
 
       - name: Build .app (x64 only, no bundle extras)
-        run: pnpm tauri build --target x86_64-apple-darwin -b app \
-            --config '{"bundle":{"createUpdaterArtifacts":false}}' 
+        run: |
+          printf '%s' '{"bundle":{"createUpdaterArtifacts":false}}' > /tmp/updater-off.json
+          pnpm tauri build --target x86_64-apple-darwin -b app --config /tmp/updater-off.json
 
       - name: Zip .app (ditto 保留 symlink 与权限)
         run: |
