@@ -2534,7 +2534,7 @@
     "deployRemovedToast": "{{path}} のプロジェクトデプロイを削除しました",
     "batchDeployToProject": "プロジェクトに一括デプロイ…",
     "batchDeployDialogTitle": "スキルをプロジェクトに一括デプロイ",
-    "batchDeployDisableGlobal": "デプロイ後に選択スキルのグローバルスイッチをオフにする（プロジェクト専用に）",
+    "batchDeployDisableGlobal": "デプロイ後に上書き可能なグローバルスイッチをオフにする（プロジェクト専用）——.agents/skills/ を読む pi と Codex のみ。Claude などには影響しません",
     "batchDeployAlreadyDeployed": "デプロイ済み",
     "batchDeployToast": "{{count}} 個のスキルを {{path}} にデプロイしました",
     "batchDeployToastFailed": "デプロイ失敗：{{names}}（対象位置に同名のコンテンツが存在する可能性）",

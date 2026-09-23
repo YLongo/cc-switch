@@ -2535,7 +2535,7 @@
     "deployRemovedToast": "已移除 {{path}} 的專案部署",
     "batchDeployToProject": "批次部署到專案…",
     "batchDeployDialogTitle": "批次部署技能到專案",
-    "batchDeployDisableGlobal": "部署後關閉所選技能的全域開關（轉為專案專屬）",
+    "batchDeployDisableGlobal": "部署後關閉所選技能的全域開關（轉為專案專屬）——僅影響能讀取 .agents/skills/ 的 pi 與 Codex，Claude 等不受影響",
     "batchDeployAlreadyDeployed": "已部署",
     "batchDeployToast": "已部署 {{count}} 個技能到 {{path}}",
     "batchDeployToastFailed": "以下技能部署失敗：{{names}}（目標位置可能已有同名內容）",

@@ -1052,11 +1052,13 @@ describe("UnifiedSkillsPanel", () => {
       screen.getByRole("button", { name: "skills.deployPickDirectory" }),
     );
 
-    // 转专属开关默认勾选
+    // 转专属开关默认不勾选（批量关全局对多项目工作流是破坏性默认）
     const exclusive = screen.getByLabelText(
       "skills.batchDeployDisableGlobal",
     ) as HTMLInputElement;
-    expect(exclusive.checked).toBe(true);
+    expect(exclusive.checked).toBe(false);
+    // 显式勾选转专属
+    await user.click(exclusive);
 
     await user.click(
       screen.getByRole("button", { name: /skills.deployConfirm/ }),
@@ -1072,16 +1074,17 @@ describe("UnifiedSkillsPanel", () => {
       projectRoot: "/mock/selected-dir",
     });
 
-    // 全局启用的开关被关闭：alpha(claude)、beta(pi)
-    await waitFor(() => expect(toggleSkillAppMock).toHaveBeenCalledTimes(2));
-    expect(toggleSkillAppMock).toHaveBeenCalledWith({
-      id: "owner/repo:alpha-skill",
-      app: "claude",
-      enabled: false,
-    });
+    // 勾选转专属也只关能被 .agents/skills/ 覆盖的 agent（pi/codex）：
+    // alpha 的 claude 开关不动（Claude 不读 .agents/skills/），beta 的 pi 关闭
+    await waitFor(() => expect(toggleSkillAppMock).toHaveBeenCalledTimes(1));
     expect(toggleSkillAppMock).toHaveBeenCalledWith({
       id: "owner/repo:beta-skill",
       app: "pi",
+      enabled: false,
+    });
+    expect(toggleSkillAppMock).not.toHaveBeenCalledWith({
+      id: "owner/repo:alpha-skill",
+      app: "claude",
       enabled: false,
     });
 
@@ -1120,8 +1123,7 @@ describe("UnifiedSkillsPanel", () => {
     await user.click(
       screen.getByRole("button", { name: "skills.deployPickDirectory" }),
     );
-    // 不转专属，聚焦冲突反馈
-    await user.click(screen.getByLabelText("skills.batchDeployDisableGlobal"));
+    // 默认不转专属，聚焦冲突反馈（勿动转专属开关）
     await user.click(
       screen.getByRole("button", { name: /skills.deployConfirm/ }),
     );
@@ -1163,9 +1165,7 @@ describe("UnifiedSkillsPanel", () => {
 
     // 全选：可选项全部勾上，已部署禁用项保持未选
     await user.click(screen.getByLabelText("skills.batchDeploySelectAll"));
-    expect(
-      screen.getByRole("checkbox", { name: /Alpha Skill/ }),
-    ).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /Alpha Skill/ })).toBeChecked();
     expect(screen.getByRole("checkbox", { name: /Beta Skill/ })).toBeChecked();
     expect(
       screen.getByRole("checkbox", { name: /Gamma Skill/ }),

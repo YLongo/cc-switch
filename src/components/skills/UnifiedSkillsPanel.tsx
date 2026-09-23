@@ -43,6 +43,11 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { settingsApi, skillsApi } from "@/lib/api";
 import { toast } from "sonner";
 import { SKILLS_APP_IDS } from "@/config/appConfig";
+
+/** 项目部署落点 `.agents/skills/` 只被 pi/Codex 读取；Claude 等其他 agent
+ * 的项目级位置不是这里，部署对它们没有项目内替代。「转专属」只允许关
+ * 这些能被项目部署覆盖的全局开关，否则对其他 agent 是纯移除而非转专属。 */
+const PROJECT_DEPLOY_COVERABLE_APPS: readonly AppId[] = ["pi", "codex"];
 import { AppCountBar } from "@/components/common/AppCountBar";
 import { AppToggleGroup } from "@/components/common/AppToggleGroup";
 import { ListItemRow } from "@/components/common/ListItemRow";
@@ -394,7 +399,8 @@ const UnifiedSkillsPanel = React.forwardRef<
   };
 
   // 批量部署（C2 汇总反馈）：allSettled 逐个跑，失败不阻塞成功方；
-  // 转专属（B2）：仅对部署成功的 skill 关闭其全部已启用的全局开关，
+  // 转专属（B2）：仅对部署成功的 skill 关闭可被 .agents/skills/ 覆盖
+  // 的全局开关（pi/codex）；Claude 等不读该目录的 agent 不动，
   // 失败方的全局状态保持原样。
   const handleBatchDeploy = async (
     projectRoot: string,
@@ -421,7 +427,10 @@ const UnifiedSkillsPanel = React.forwardRef<
       await Promise.allSettled(
         succeeded.flatMap((s) =>
           (Object.entries(s.apps) as Array<[AppId, boolean]>)
-            .filter(([, enabled]) => enabled)
+            .filter(
+              ([app, enabled]) =>
+                enabled && PROJECT_DEPLOY_COVERABLE_APPS.includes(app),
+            )
             .map(([app]) =>
               toggleAppMutation.mutateAsync({
                 id: s.id,
@@ -1206,7 +1215,7 @@ const BatchDeployDialog: React.FC<BatchDeployDialogProps> = ({
   const { t } = useTranslation();
   const [selectedRoot, setSelectedRoot] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [disableGlobal, setDisableGlobal] = useState(true);
+  const [disableGlobal, setDisableGlobal] = useState(false);
 
   const deployedInProject = useMemo(() => {
     const roots = new Set<string>();
@@ -1356,7 +1365,7 @@ const BatchDeployDialog: React.FC<BatchDeployDialogProps> = ({
             </div>
           </div>
 
-          {/* 转专属选项（默认开） */}
+          {/* 转专属选项（默认不开：批量关全局对多项目工作流是破坏性默认） */}
           <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer">
             <Checkbox
               checked={disableGlobal}
