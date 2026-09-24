@@ -1271,7 +1271,7 @@ fn linux_config_dir() -> PathBuf {
     linux_config_dir_from_home(&get_home_dir(), xdg_config_home.as_deref(), is_flatpak())
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", all(test, unix)))]
 fn linux_config_dir_from_home(
     home: &Path,
     xdg_config_home: Option<&Path>,
@@ -1403,7 +1403,7 @@ mod tests {
         )
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", all(test, unix)))]
     #[test]
     fn linux_config_dir_uses_absolute_xdg_config_home_outside_flatpak() {
         let home = Path::new("/home/tester");
@@ -1415,7 +1415,7 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", all(test, unix)))]
     #[test]
     fn linux_config_dir_falls_back_for_missing_or_relative_xdg_config_home() {
         let home = Path::new("/home/tester");
@@ -1430,7 +1430,7 @@ mod tests {
         );
     }
 
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", all(test, unix)))]
     #[test]
     fn linux_config_dir_uses_host_config_when_cc_switch_runs_in_flatpak() {
         let home = Path::new("/home/tester");
